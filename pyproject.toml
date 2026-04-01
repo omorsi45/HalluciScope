@@ -1,0 +1,46 @@
+[project]
+name = "halluciscope"
+version = "0.1.0"
+description = "Multi-signal hallucination detection for RAG question-answering"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "langchain-text-splitters>=0.3.0",
+    "sentence-transformers>=3.3.0",
+    "transformers>=4.47.0",
+    "torch>=2.5.0",
+    "faiss-cpu>=1.9.0",
+    "httpx>=0.28.0",
+    "aiosqlite>=0.20.0",
+    "typer>=0.15.0",
+    "rich>=13.9.0",
+    "pypdf>=5.1.0",
+    "python-multipart>=0.0.18",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+]
+eval = [
+    "datasets>=3.2.0",
+    "scikit-learn>=1.6.0",
+    "matplotlib>=3.10.0",
+]
+
+[project.scripts]
+halluciscope = "backend.cli.main:app"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
