@@ -28,4 +28,7 @@ class Settings(BaseSettings):
     # Database
     db_path: str = "halluciscope.db"
 
+    # Document index cache
+    index_cache_maxsize: int = 32
+
     model_config = {"env_prefix": "HALLUCISCOPE_"}
