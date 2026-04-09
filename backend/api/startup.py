@@ -1,3 +1,8 @@
+from contextlib import asynccontextmanager
+
+import httpx
+from fastapi import FastAPI
+
 from backend.config import Settings
 from backend.models.loader import get_embedding_model, get_nli_model
 from backend.core.chunker import Chunker
@@ -10,13 +15,14 @@ from backend.db.repository import Repository
 from backend.api.app import create_app
 
 
-def create_configured_app():
+def create_configured_app() -> FastAPI:
     """Create the FastAPI app with all real dependencies wired up."""
     settings = Settings()
-    app = create_app()
 
-    @app.on_event("startup")
-    async def startup():
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        # ── startup ──────────────────────────────────────────────────
+        http_client = httpx.AsyncClient(timeout=120.0)
         embedding_model = get_embedding_model()
         tokenizer, nli_model = get_nli_model()
 
@@ -35,13 +41,13 @@ def create_configured_app():
             n_samples=settings.consistency_samples,
             temperature=settings.consistency_temperature,
             similarity_threshold=settings.consistency_similarity_threshold,
+            http_client=http_client,
         )
         ensemble = EnsembleScorer(
             nli_weight=settings.nli_weight,
             consistency_weight=settings.consistency_weight,
             similarity_weight=settings.similarity_weight,
         )
-
         pipeline = Pipeline(
             settings=settings,
             chunker=chunker,
@@ -49,17 +55,19 @@ def create_configured_app():
             similarity_verifier=similarity_verifier,
             consistency_verifier=consistency_verifier,
             ensemble=ensemble,
+            http_client=http_client,
         )
-
         repo = Repository(settings.db_path)
         await repo.init()
 
         app.state.pipeline = pipeline
         app.state.repo = repo
+        app.state.http_client = http_client
 
-    @app.on_event("shutdown")
-    async def shutdown():
-        if hasattr(app.state, "repo"):
-            await app.state.repo.close()
+        yield  # ── app runs ─────────────────────────────────────────
 
-    return app
+        # ── shutdown ─────────────────────────────────────────────────
+        await http_client.aclose()
+        await repo.close()
+
+    return create_app(lifespan=lifespan)
