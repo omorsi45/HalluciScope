@@ -48,6 +48,7 @@ async def decompose_claims(
     answer: str,
     base_url: str,
     model: str,
+    client=None,
 ) -> list[str]:
     """Decompose an answer into atomic verifiable claims using the LLM."""
     prompt = DECOMPOSE_USER.format(answer=answer)
@@ -57,5 +58,6 @@ async def decompose_claims(
         base_url=base_url,
         model=model,
         temperature=0.0,
+        client=client,
     )
     return parse_claims_response(raw)

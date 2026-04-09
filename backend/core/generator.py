@@ -17,8 +17,13 @@ async def generate_answer(
     base_url: str,
     model: str,
     temperature: float = 0.0,
+    client: httpx.AsyncClient | None = None,
 ) -> str:
-    """Generate an answer using Ollama given context chunks and a question."""
+    """Generate an answer using Ollama given context chunks and a question.
+
+    If a shared client is provided it is used directly. Otherwise a
+    temporary client is created for this call (preserves CLI compatibility).
+    """
     context = "\n\n".join(context_chunks)
     user_message = RAG_USER_TEMPLATE.format(context=context, question=question)
 
@@ -32,8 +37,12 @@ async def generate_answer(
         "options": {"temperature": temperature},
     }
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    if client is not None:
         response = await client.post(f"{base_url}/api/chat", json=payload)
         response.raise_for_status()
-        data = response.json()
-        return data["message"]["content"]
+        return response.json()["message"]["content"]
+
+    async with httpx.AsyncClient(timeout=120.0) as _client:
+        response = await _client.post(f"{base_url}/api/chat", json=payload)
+        response.raise_for_status()
+        return response.json()["message"]["content"]

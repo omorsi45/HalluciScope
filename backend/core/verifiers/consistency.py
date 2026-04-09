@@ -42,11 +42,13 @@ class ConsistencyVerifier(BaseVerifier):
             base_url=self.base_url,
             model=self.model,
             temperature=self.temperature,
+            client=self.http_client,
         )
         return await decompose_claims(
             answer=answer,
             base_url=self.base_url,
             model=self.model,
+            client=self.http_client,
         )
 
     def _claim_appears_in_sample(

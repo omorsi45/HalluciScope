@@ -59,3 +59,28 @@ async def test_generate_answer_with_temperature():
         call_args = mock_client.post.call_args
         body = call_args.kwargs.get("json") or call_args[1].get("json")
         assert body["options"]["temperature"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_uses_provided_client():
+    """When a client is provided, it is used directly (no new client created)."""
+    import httpx
+    from unittest.mock import AsyncMock, MagicMock
+
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"message": {"content": "Answer from shared client."}}
+
+    shared_client = AsyncMock(spec=httpx.AsyncClient)
+    shared_client.post = AsyncMock(return_value=mock_response)
+
+    result = await generate_answer(
+        question="What is the answer?",
+        context_chunks=["Some context."],
+        base_url="http://localhost:11434",
+        model="llama3.1:8b",
+        client=shared_client,
+    )
+
+    assert result == "Answer from shared client."
+    shared_client.post.assert_called_once()
