@@ -74,7 +74,7 @@ class Pipeline:
         nli_scores, similarity_scores, consistency_scores = await asyncio.gather(
             self.nli_verifier.verify(claims, chunks),
             self.similarity_verifier.verify(claims, chunks),
-            self.consistency_verifier.verify(claims, chunks),
+            self.consistency_verifier.verify(claims, chunks, question=question),
         )
 
         # 5. Ensemble scoring

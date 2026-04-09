@@ -16,6 +16,7 @@ class SimilarityVerifier(BaseVerifier):
         self,
         claims: list[str],
         context_chunks: list[str],
+        question: str = "",
     ) -> list[ClaimScore]:
         chunk_embeddings = self.embedding_model.encode(
             context_chunks, normalize_embeddings=True

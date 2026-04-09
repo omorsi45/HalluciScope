@@ -18,6 +18,7 @@ class BaseVerifier(ABC):
         self,
         claims: list[str],
         context_chunks: list[str],
+        question: str = "",
     ) -> list[ClaimScore]:
         """Score each claim. Returns one ClaimScore per claim, in order."""
         ...
