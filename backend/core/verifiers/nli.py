@@ -36,6 +36,8 @@ class NLIVerifier(BaseVerifier):
         context_chunks: list[str],
         question: str = "",
     ) -> list[ClaimScore]:
+        if not claims or not context_chunks:
+            return []
         # Build flat list: claim i with chunk j -> index i*n_chunks + j
         n_chunks = len(context_chunks)
         pairs = [(chunk, claim) for claim in claims for chunk in context_chunks]
@@ -51,7 +53,7 @@ class NLIVerifier(BaseVerifier):
             )
             with torch.no_grad():
                 output = self.model(**inputs)
-            return softmax(output.logits, dim=-1).numpy()  # shape: [N*K, 3]
+            return softmax(output.logits, dim=-1).cpu().numpy()  # shape: [N*K, 3]
 
         loop = asyncio.get_running_loop()
         all_probs = await loop.run_in_executor(None, _batch_infer)
