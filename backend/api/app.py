@@ -5,11 +5,12 @@ from backend.api.routes.analysis import router as analysis_router
 from backend.api.routes.feedback import router as feedback_router
 
 
-def create_app() -> FastAPI:
+def create_app(lifespan=None) -> FastAPI:
     app = FastAPI(
         title="HalluciScope",
         description="Multi-signal hallucination detection for RAG QA",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     app.add_middleware(

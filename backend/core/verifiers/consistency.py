@@ -24,6 +24,7 @@ class ConsistencyVerifier(BaseVerifier):
         n_samples: int = 5,
         temperature: float = 0.7,
         similarity_threshold: float = 0.85,
+        http_client=None,
     ):
         self.embedding_model = embedding_model
         self.base_url = base_url
@@ -31,6 +32,7 @@ class ConsistencyVerifier(BaseVerifier):
         self.n_samples = n_samples
         self.temperature = temperature
         self.similarity_threshold = similarity_threshold
+        self.http_client = http_client
 
     async def _sample_once(self, context_chunks: list[str], question: str) -> list[str]:
         """Generate one sample answer and decompose it into claims."""
@@ -40,11 +42,13 @@ class ConsistencyVerifier(BaseVerifier):
             base_url=self.base_url,
             model=self.model,
             temperature=self.temperature,
+            client=self.http_client,
         )
         return await decompose_claims(
             answer=answer,
             base_url=self.base_url,
             model=self.model,
+            client=self.http_client,
         )
 
     def _claim_appears_in_sample(
@@ -62,12 +66,11 @@ class ConsistencyVerifier(BaseVerifier):
         self,
         claims: list[str],
         context_chunks: list[str],
+        question: str = "",
     ) -> list[ClaimScore]:
-        question_context = "\n".join(context_chunks)
-
-        # Sample N answers concurrently
+        # Sample N answers concurrently using the real question
         tasks = [
-            self._sample_once(context_chunks, question_context)
+            self._sample_once(context_chunks, question)
             for _ in range(self.n_samples)
         ]
         sample_claim_lists = await asyncio.gather(*tasks)
@@ -87,7 +90,9 @@ class ConsistencyVerifier(BaseVerifier):
                 )
                 sample_embeddings_list.append(np.array(embeds, dtype=np.float32))
             else:
-                sample_embeddings_list.append(np.array([]).reshape(0, claim_embeds.shape[1]))
+                sample_embeddings_list.append(
+                    np.array([]).reshape(0, claim_embeds.shape[1])
+                )
 
         # Count appearances for each claim
         results = []

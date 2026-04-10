@@ -30,26 +30,40 @@ async def test_nli_score_mapping():
 
 @pytest.mark.asyncio
 async def test_nli_verify_returns_correct_count():
-    """Test that verify returns one score per claim."""
+    """Verifier calls tokenizer once with all pairs and returns one score per claim."""
     import torch
 
     tokenizer = MagicMock()
     model = MagicMock()
 
-    tokenizer.side_effect = lambda *args, **kwargs: {
-        "input_ids": torch.zeros(1, 10, dtype=torch.long),
-        "attention_mask": torch.ones(1, 10, dtype=torch.long),
-    }
+    def mock_tokenize(premises, hypotheses, **kwargs):
+        n = len(premises)
+        return {
+            "input_ids": torch.zeros(n, 10, dtype=torch.long),
+            "attention_mask": torch.ones(n, 10, dtype=torch.long),
+        }
+    tokenizer.side_effect = mock_tokenize
 
-    mock_output = MagicMock()
-    mock_output.logits = torch.tensor([[0.0, 0.0, 5.0]])  # Strong entailment
-    model.return_value = mock_output
+    def mock_forward(**kwargs):
+        n = kwargs["input_ids"].shape[0]
+        out = MagicMock()
+        logits = torch.zeros(n, 3)
+        logits[:, 2] = 5.0  # strong entailment for all pairs
+        out.logits = logits
+        return out
+    model.side_effect = mock_forward
 
     verifier = NLIVerifier(tokenizer=tokenizer, model=model)
-    claims = ["Claim A.", "Claim B."]
-    chunks = ["Some context."]
+    results = await verifier.verify(
+        claims=["Claim A.", "Claim B."],
+        context_chunks=["Some context."],
+    )
 
-    results = await verifier.verify(claims, chunks)
     assert len(results) == 2
     for r in results:
         assert r.hallucination_score < 0.1
+
+    # Tokenizer called exactly once with both pairs
+    assert tokenizer.call_count == 1
+    # Model called exactly once
+    assert model.call_count == 1
