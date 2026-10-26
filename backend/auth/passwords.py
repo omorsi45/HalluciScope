@@ -17,7 +17,7 @@ _DKLEN = 32
 _SALT_BYTES = 16
 _MAXMEM = 64 * 1024 * 1024
 _N_LIMIT = 2**20
-_DKLEN_LIMIT = 64
+_WORK_FACTOR = 16
 _INT_RE = re.compile(r"[0-9]{1,10}")
 
 
@@ -37,6 +37,9 @@ def _encode(raw: bytes) -> str:
 
 
 def _decode(text: str) -> bytes:
+    # Our format is unpadded only, so any "=" is rejected rather than tolerated.
+    if "=" in text:
+        raise ValueError("padding is not part of the stored format")
     return base64.b64decode(text + "=" * (-len(text) % 4), validate=True)
 
 
@@ -60,9 +63,12 @@ def _parse_stored(stored: str) -> tuple[int, int, int, bytes, bytes] | None:
         expected = _decode(parts[5])
     except ValueError:
         return None
-    if not salt or not 0 < len(expected) <= _DKLEN_LIMIT:
+    if len(salt) != _SALT_BYTES or len(expected) != _DKLEN:
         return None
     if n < 2 or n & (n - 1) or n > _N_LIMIT or r < 1 or p < 1:
+        return None
+    # Bound total CPU work: memory alone allows hours-long verifications.
+    if n * r * p > _N * _R * _P * _WORK_FACTOR:
         return None
     # scrypt working memory is about 128 * r * (n + p + 2) bytes.
     if 128 * r * (n + p + 2) > _MAXMEM:
