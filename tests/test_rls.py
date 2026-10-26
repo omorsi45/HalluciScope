@@ -80,3 +80,68 @@ async def test_every_tenant_table_has_forced_rls(db):
         if not (row["relrowsecurity"] and row["relforcerowsecurity"])
     )
     assert unprotected == []
+
+
+async def _create_member(db, tenant_id: uuid.UUID, email: str) -> uuid.UUID:
+    async with db.system_tx() as conn:
+        cur = await conn.execute(
+            "insert into users (email, password_hash, display_name) values (%s, %s, %s) "
+            "returning id",
+            (email, "x", email),
+        )
+        user_id = (await cur.fetchone())["id"]
+        await conn.execute(
+            "insert into memberships (tenant_id, user_id, role) values (%s, %s, 'member')",
+            (tenant_id, user_id),
+        )
+    return user_id
+
+
+async def _create_collection(db, tenant_id: uuid.UUID, name: str) -> uuid.UUID:
+    async with db.tenant_tx(tenant_id) as conn:
+        cur = await conn.execute(
+            "insert into collections (tenant_id, name) values (%s, %s) returning id",
+            (tenant_id, name),
+        )
+        return (await cur.fetchone())["id"]
+
+
+_INSERT_GRANT = (
+    "insert into collection_grants (tenant_id, collection_id, user_id, permission) "
+    "values (%s, %s, %s, 'read')"
+)
+
+
+async def test_grant_for_other_tenants_collection_rejected(db):
+    tenant_a = await _create_tenant(db, "a")
+    tenant_b = await _create_tenant(db, "b")
+    user_a = await _create_member(db, tenant_a, "a@example.com")
+    collection_b = await _create_collection(db, tenant_b, "docs")
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        async with db.tenant_tx(tenant_a) as conn:
+            await conn.execute(_INSERT_GRANT, (tenant_a, collection_b, user_a))
+
+
+async def test_grant_for_non_member_rejected(db):
+    tenant_a = await _create_tenant(db, "a")
+    tenant_b = await _create_tenant(db, "b")
+    outsider = await _create_member(db, tenant_b, "outsider@example.com")
+    collection_a = await _create_collection(db, tenant_a, "docs")
+    with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        async with db.tenant_tx(tenant_a) as conn:
+            await conn.execute(_INSERT_GRANT, (tenant_a, collection_a, outsider))
+
+
+async def test_removing_membership_removes_grants(db):
+    tenant_a = await _create_tenant(db, "a")
+    user_a = await _create_member(db, tenant_a, "a@example.com")
+    collection_a = await _create_collection(db, tenant_a, "docs")
+    async with db.tenant_tx(tenant_a) as conn:
+        await conn.execute(_INSERT_GRANT, (tenant_a, collection_a, user_a))
+    async with db.system_tx() as conn:
+        await conn.execute(
+            "delete from memberships where tenant_id = %s and user_id = %s", (tenant_a, user_a)
+        )
+    async with db.tenant_tx(tenant_a) as conn:
+        cur = await conn.execute("select count(*) as n from collection_grants")
+        assert (await cur.fetchone())["n"] == 0

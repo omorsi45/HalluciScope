@@ -7,7 +7,8 @@ create table collections (
     kind text not null default 'normal' check (kind in ('normal', 'quick', 'benchmark')),
     created_by uuid references users (id),
     created_at timestamptz not null default now(),
-    unique (tenant_id, name)
+    unique (tenant_id, name),
+    unique (tenant_id, id)
 );
 
 alter table collections enable row level security;
@@ -18,11 +19,13 @@ create policy tenant_isolation on collections
 
 create table collection_grants (
     tenant_id uuid not null references tenants (id),
-    collection_id uuid not null references collections (id) on delete cascade,
-    user_id uuid not null references users (id),
+    collection_id uuid not null,
+    user_id uuid not null,
     permission text not null check (permission in ('read', 'write', 'admin')),
     created_at timestamptz not null default now(),
-    primary key (collection_id, user_id)
+    primary key (collection_id, user_id),
+    foreign key (tenant_id, collection_id) references collections (tenant_id, id) on delete cascade,
+    foreign key (tenant_id, user_id) references memberships (tenant_id, user_id) on delete cascade
 );
 
 alter table collection_grants enable row level security;
