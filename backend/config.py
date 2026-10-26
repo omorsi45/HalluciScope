@@ -28,6 +28,22 @@ class Settings(BaseSettings):
     # Database
     db_path: str = "halluciscope.db"
 
+    # Postgres
+    database_url: str = "postgresql://eg_app@localhost:54329/evidencegraph"
+    migration_database_url: str = "postgresql://eg_owner@localhost:54329/evidencegraph"
+
+    # Web / auth
+    cors_origins: list[str] = ["http://localhost:5173"]
+    allow_registration: bool = True
+    dev_insecure_cookies: bool = False
+    metrics_token: str | None = None
+    session_ttl_days: int = 7
+
+    # Worker / logging
+    worker_concurrency: int = 1
+    worker_metrics_port: int = 9101
+    log_level: str = "INFO"
+
     # Document index cache
     index_cache_maxsize: int = 32
 

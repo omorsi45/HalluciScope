@@ -113,6 +113,15 @@ def check(
 
 
 @app.command()
+def migrate():
+    """Apply pending SQL migrations to the Postgres database."""
+    from backend.db.migrate import migrate as run_migrations
+
+    applied = asyncio.run(run_migrations(Settings().migration_database_url))
+    console.print(f"applied: {applied}" if applied else "up to date")
+
+
+@app.command()
 def evaluate(
     dataset: str = typer.Option(..., help="Dataset name (halueval, custom, adversarial)"),
     output: Path = typer.Option(Path("evaluation/results"), help="Output directory"),

@@ -1,6 +1,9 @@
 
 import pytest
 
+# Re-export the pg fixtures so every test module sees them; __all__ limits the names.
+from tests.pg_fixtures import *  # noqa: F403
+
 
 @pytest.fixture
 def sample_document_text():
