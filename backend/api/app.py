@@ -6,6 +6,7 @@ from backend.api.middleware import (
     BodySizeLimitMiddleware,
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
+    UnhandledErrorMiddleware,
 )
 from backend.api.routes.analysis import router as analysis_router
 from backend.api.routes.feedback import router as feedback_router
@@ -14,6 +15,8 @@ from backend.config import Settings
 
 def create_app(settings: Settings | None = None, lifespan=None) -> FastAPI:
     settings = settings or Settings()
+    if "*" in settings.cors_origins:
+        raise ValueError("cors_origins must not contain '*' because credentials are allowed")
     app = FastAPI(
         title="HalluciScope",
         description="Multi-signal hallucination detection for RAG QA",
@@ -24,7 +27,9 @@ def create_app(settings: Settings | None = None, lifespan=None) -> FastAPI:
 
     install_error_handlers(app)
 
-    # add_middleware prepends, so the last one added is the outermost.
+    # add_middleware prepends, so the last one added is the outermost. The error middleware
+    # is innermost so its 500 passes back out through CORS and the security headers.
+    app.add_middleware(UnhandledErrorMiddleware)
     app.add_middleware(BodySizeLimitMiddleware)
     app.add_middleware(
         CORSMiddleware,

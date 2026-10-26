@@ -220,3 +220,101 @@ async def test_overflow_after_response_started_closes_by_raising():
     with pytest.raises(_BodyTooLarge):
         await middleware(scope, receive, send)
     assert sent == ["http.response.start"]
+
+
+async def test_unhandled_error_carries_security_and_cors_headers(client):
+    response = await client.get("/api/v1/_boom", headers={"Origin": ORIGIN})
+    assert response.status_code == 500
+    assert response.headers["x-request-id"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert (
+        response.headers["content-security-policy"] == "default-src 'none'; frame-ancestors 'none'"
+    )
+    assert response.headers["access-control-allow-origin"] == ORIGIN
+    assert response.headers["access-control-allow-credentials"] == "true"
+    assert "x-request-id" in response.headers["access-control-expose-headers"].lower()
+
+
+def _request_metric_methods() -> set[str]:
+    return {key[1] for key in HTTP_REQUESTS._children}
+
+
+async def test_unknown_methods_share_one_metric_label(client):
+    for index in range(5):
+        await client.request(f"BREW{index}", "/api/v1/_apierr")
+    methods = _request_metric_methods()
+    assert not {m for m in methods if m.startswith("BREW")}
+    assert "OTHER" in methods
+    assert methods <= {"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "OTHER"}
+
+
+async def _asgi_get(app, headers):
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": "/api/v1/_apierr",
+        "raw_path": b"/api/v1/_apierr",
+        "query_string": b"",
+        "headers": headers,
+        "client": ("127.0.0.1", 1),
+        "server": ("test", 80),
+    }
+    await app(scope, receive, send)
+    return sent
+
+
+async def test_request_id_with_trailing_newline_is_replaced(app):
+    sent = await _asgi_get(app, [(b"x-request-id", b"abc-1\n")])
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    value = dict(start["headers"])[b"x-request-id"].decode()
+    assert re.fullmatch(r"[0-9a-f]{32}", value)
+
+
+@pytest.mark.parametrize("declared", [b"\xb2", b"1" * 20, b"-5", b"1 2", b""])
+async def test_odd_content_length_is_ignored_not_fatal(declared):
+    from backend.api.middleware import BodySizeLimitMiddleware
+
+    calls = []
+
+    async def inner(scope, receive, send):
+        calls.append(scope["path"])
+        await send({"type": "http.response.start", "status": 204, "headers": []})
+        await send({"type": "http.response.body", "body": b""})
+
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        sent.append(message)
+
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/x",
+        "headers": [(b"content-length", declared)],
+    }
+    await BodySizeLimitMiddleware(inner, json_limit=10)(scope, receive, send)
+    assert calls == ["/x"]
+    assert sent[0]["status"] == 204
+
+
+def test_create_app_rejects_wildcard_cors_origin():
+    with pytest.raises(ValueError, match="cors"):
+        create_app(Settings(cors_origins=["*"]))
+    with pytest.raises(ValueError, match="cors"):
+        create_app(Settings(cors_origins=[ORIGIN, "*"]))

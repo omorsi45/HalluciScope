@@ -18,7 +18,52 @@ from backend.obs.metrics import HTTP_DURATION, HTTP_REQUESTS
 
 logger = logging.getLogger(__name__)
 
-_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_REQUEST_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
+_KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
+_MAX_CONTENT_LENGTH_DIGITS = 19
+
+
+def _method_label(method: str) -> str:
+    """Bound the metric label: the method is client-controlled, so unknown ones share a value."""
+    return method if method in _KNOWN_METHODS else "OTHER"
+
+
+class _BodyTooLarge(Exception):
+    """Raised inside the wrapped receive to abort the app once the limit is crossed."""
+
+
+class UnhandledErrorMiddleware:
+    """Innermost: turn an unhandled exception into the generic 500 problem response.
+
+    Sitting inside SecurityHeaders and CORS means the 500 passes back out through them and
+    carries their headers (and the request id), so a cross-origin SPA can read it. The
+    framework's own outer error handler would bypass all of them.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        started = False
+
+        async def send_wrapper(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_wrapper)
+        except _BodyTooLarge:
+            raise
+        except Exception:
+            if started:
+                raise
+            await unhandled_error_response()(scope, receive, send_wrapper)
 
 
 class RequestContextMiddleware:
@@ -33,7 +78,7 @@ class RequestContextMiddleware:
             return
 
         supplied = Headers(scope=scope).get("x-request-id")
-        request_id = supplied if supplied and _REQUEST_ID_RE.match(supplied) else uuid4().hex
+        request_id = supplied if supplied and _REQUEST_ID_RE.fullmatch(supplied) else uuid4().hex
         status = 500
         started = False
         start = time.perf_counter()
@@ -52,15 +97,14 @@ class RequestContextMiddleware:
             except Exception:
                 if started:
                     raise
-                # Answer here, inside the request context, so the 500 carries the request id
-                # and the headers added by the inner middleware (the framework's outer error
-                # handler would bypass both).
+                # Fallback only: UnhandledErrorMiddleware normally answers first, inside CORS
+                # and SecurityHeaders. This 500 carries the request id but not their headers.
                 await unhandled_error_response()(scope, receive, send_wrapper)
             finally:
                 duration = time.perf_counter() - start
                 route_obj = scope.get("route")
                 route = getattr(route_obj, "path", None) or "unmatched"
-                method = scope["method"]
+                method = _method_label(scope["method"])
                 HTTP_REQUESTS.labels(route=route, method=method, status=str(status)).inc()
                 HTTP_DURATION.labels(route=route, method=method).observe(duration)
                 logger.info(
@@ -100,10 +144,6 @@ class SecurityHeadersMiddleware:
         await self.app(scope, receive, send_wrapper)
 
 
-class _BodyTooLarge(Exception):
-    """Raised inside the wrapped receive to abort the app once the limit is crossed."""
-
-
 class BodySizeLimitMiddleware:
     """Reject oversized bodies without buffering them.
 
@@ -133,7 +173,15 @@ class BodySizeLimitMiddleware:
         limit = self.upload_limit if is_multipart else self.json_limit
 
         declared = headers.get("content-length")
-        if declared is not None and declared.isdigit() and int(declared) > limit:
+        # Only plain ASCII digits (isdigit alone accepts characters int() rejects); anything
+        # else is treated as absent and the streamed byte count still applies.
+        if (
+            declared is not None
+            and declared.isascii()
+            and declared.isdigit()
+            and len(declared) <= _MAX_CONTENT_LENGTH_DIGITS
+            and int(declared) > limit
+        ):
             await self._reject(scope, receive, send)
             return
 
