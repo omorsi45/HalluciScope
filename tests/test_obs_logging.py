@@ -95,3 +95,44 @@ def test_configure_logging_installs_json_formatter():
             lg.setLevel(level)
             lg.propagate = propagate
             lg.disabled = disabled
+
+
+def test_non_string_message_logs_type_name_only(capture):
+    logger, stream = capture
+    try:
+        raise ValueError("SECRET-DOC")
+    except ValueError as error:
+        logger.exception(error)
+    line = stream.getvalue()
+    assert "SECRET-DOC" not in line
+    assert json.loads(line)["msg"] == "ValueError"
+
+
+def _reject_constant(name):
+    raise AssertionError(f"non-standard JSON constant emitted: {name}")
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_float_emitted_as_null(capture, value):
+    logger, stream = capture
+    logger.info("timed", extra={"duration_ms": value})
+    data = json.loads(stream.getvalue(), parse_constant=_reject_constant)
+    assert data["duration_ms"] is None
+
+
+def test_arbitrary_object_in_whitelisted_key_emitted_as_type_name(capture):
+    class Sneaky:
+        def __str__(self):
+            return "SECRET-OBJ"
+
+        __repr__ = __str__
+
+    logger, stream = capture
+    logger.info("odd", extra={"route": Sneaky(), "n_claims": 2, "stage": None, "bytes": True})
+    line = stream.getvalue()
+    data = json.loads(line)
+    assert "SECRET-OBJ" not in line
+    assert data["route"] == "Sneaky"
+    assert data["n_claims"] == 2
+    assert data["stage"] is None
+    assert data["bytes"] is True

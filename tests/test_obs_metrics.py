@@ -199,3 +199,14 @@ def test_metrics_server_auth():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_metrics_server_blank_token_is_unconfigured():
+    server, base = _serve("")
+    try:
+        assert _get(f"{base}/metrics")[0] == 404
+        assert _get(f"{base}/metrics", token="")[0] == 404
+        assert _get(f"{base}/metrics", token="anything")[0] == 404
+    finally:
+        server.shutdown()
+        server.server_close()
