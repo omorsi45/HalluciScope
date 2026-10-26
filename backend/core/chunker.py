@@ -1,5 +1,6 @@
-import numpy as np
 from dataclasses import dataclass
+
+import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 
@@ -8,7 +9,7 @@ class DocumentIndex:
     """Self-contained, immutable index for a single document.
 
     Returned by Chunker.build_index(). Safe to pass between concurrent
-    requests — all state lives here, not on the Chunker instance.
+    requests. All state lives here, not on the Chunker instance.
     """
     chunks: list[str]
     embeddings: np.ndarray

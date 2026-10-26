@@ -29,7 +29,9 @@ class Repository:
         claims: list[dict],
     ) -> int:
         cursor = await self._db.execute(
-            "INSERT INTO analyses (question, document_text, answer, overall_score, claims_json) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO analyses "
+            "(question, document_text, answer, overall_score, claims_json) "
+            "VALUES (?, ?, ?, ?, ?)",
             (question, document_text, answer, overall_score, json.dumps(claims)),
         )
         await self._db.commit()
@@ -54,7 +56,8 @@ class Repository:
 
     async def list_analyses(self, limit: int = 50) -> list[dict]:
         cursor = await self._db.execute(
-            "SELECT id, question, answer, overall_score, created_at FROM analyses ORDER BY id DESC LIMIT ?",
+            "SELECT id, question, answer, overall_score, created_at "
+            "FROM analyses ORDER BY id DESC LIMIT ?",
             (limit,),
         )
         rows = await cursor.fetchall()

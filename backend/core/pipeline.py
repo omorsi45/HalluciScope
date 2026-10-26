@@ -7,12 +7,12 @@ import httpx
 
 from backend.config import Settings
 from backend.core.chunker import Chunker, DocumentIndex
-from backend.core.generator import generate_answer
 from backend.core.decomposer import decompose_claims
+from backend.core.ensemble import EnsembleScorer, ScoredClaim
+from backend.core.generator import generate_answer
+from backend.core.verifiers.consistency import ConsistencyVerifier
 from backend.core.verifiers.nli import NLIVerifier
 from backend.core.verifiers.similarity import SimilarityVerifier
-from backend.core.verifiers.consistency import ConsistencyVerifier
-from backend.core.ensemble import EnsembleScorer, ScoredClaim
 
 
 @dataclass

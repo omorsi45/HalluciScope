@@ -1,9 +1,9 @@
 from fastapi import APIRouter, Request
 
 from backend.api.schemas import (
+    AnalysisListItem,
     AnalyzeRequest,
     AnalyzeResponse,
-    AnalysisListItem,
     ClaimResponse,
 )
 

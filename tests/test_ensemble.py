@@ -1,12 +1,13 @@
-import pytest
+from backend.core.ensemble import ConfidenceTier, EnsembleScorer
 from backend.core.verifiers.base import ClaimScore
-from backend.core.ensemble import EnsembleScorer, ScoredClaim, ConfidenceTier
 
 
 def _make_claim_scores(claim: str, nli: float, consistency: float, similarity: float):
     return (
         ClaimScore(claim=claim, hallucination_score=nli, details={"verifier": "nli"}),
-        ClaimScore(claim=claim, hallucination_score=consistency, details={"verifier": "consistency"}),
+        ClaimScore(
+            claim=claim, hallucination_score=consistency, details={"verifier": "consistency"}
+        ),
         ClaimScore(claim=claim, hallucination_score=similarity, details={"verifier": "similarity"}),
     )
 
@@ -67,9 +68,17 @@ def test_ensemble_multiple_claims():
 
 def test_ensemble_preserves_details():
     scorer = EnsembleScorer()
-    nli = ClaimScore(claim="C.", hallucination_score=0.1, details={"verifier": "nli", "entailment": 0.9})
-    cons = ClaimScore(claim="C.", hallucination_score=0.2, details={"verifier": "consistency", "appearances": 4})
-    sim = ClaimScore(claim="C.", hallucination_score=0.3, details={"verifier": "similarity", "max_similarity": 0.7})
+    nli = ClaimScore(
+        claim="C.", hallucination_score=0.1, details={"verifier": "nli", "entailment": 0.9}
+    )
+    cons = ClaimScore(
+        claim="C.", hallucination_score=0.2, details={"verifier": "consistency", "appearances": 4}
+    )
+    sim = ClaimScore(
+        claim="C.",
+        hallucination_score=0.3,
+        details={"verifier": "similarity", "max_similarity": 0.7},
+    )
     results = scorer.score(nli_scores=[nli], consistency_scores=[cons], similarity_scores=[sim])
     assert results[0].verifier_details["nli"]["entailment"] == 0.9
     assert results[0].verifier_details["consistency"]["appearances"] == 4

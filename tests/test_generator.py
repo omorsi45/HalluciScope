@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from backend.core.generator import generate_answer
 
 
@@ -64,8 +66,9 @@ async def test_generate_answer_with_temperature():
 @pytest.mark.asyncio
 async def test_generate_answer_uses_provided_client():
     """When a client is provided, it is used directly (no new client created)."""
-    import httpx
     from unittest.mock import AsyncMock, MagicMock
+
+    import httpx
 
     mock_response = MagicMock()
     mock_response.raise_for_status = MagicMock()

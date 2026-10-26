@@ -1,8 +1,9 @@
 import asyncio
+
 import numpy as np
 
-from backend.core.generator import generate_answer
 from backend.core.decomposer import decompose_claims
+from backend.core.generator import generate_answer
 from backend.core.verifiers.base import BaseVerifier, ClaimScore
 
 

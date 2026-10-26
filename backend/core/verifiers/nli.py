@@ -1,4 +1,5 @@
 import asyncio
+
 import numpy as np
 import torch
 from torch.nn.functional import softmax
@@ -14,7 +15,7 @@ class NLIVerifier(BaseVerifier):
     neutral), never assumed.
     Score mapping: hallucination = contradiction*1.0 + neutral*0.5 + entailment*0.0
 
-    All claim×chunk pairs are tokenized as a single batch and run through
+    All claim x chunk pairs are tokenized as a single batch and run through
     the model in one forward pass, then offloaded via run_in_executor so
     the async event loop is not blocked.
     """

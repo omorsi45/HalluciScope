@@ -16,13 +16,13 @@ console = Console()
 
 def _build_pipeline():
     """Build the full pipeline with real dependencies. Mocked in tests."""
-    from backend.models.loader import get_embedding_model, get_nli_model
     from backend.core.chunker import Chunker
-    from backend.core.verifiers.nli import NLIVerifier
-    from backend.core.verifiers.similarity import SimilarityVerifier
-    from backend.core.verifiers.consistency import ConsistencyVerifier
     from backend.core.ensemble import EnsembleScorer
     from backend.core.pipeline import Pipeline
+    from backend.core.verifiers.consistency import ConsistencyVerifier
+    from backend.core.verifiers.nli import NLIVerifier
+    from backend.core.verifiers.similarity import SimilarityVerifier
+    from backend.models.loader import get_embedding_model, get_nli_model
 
     settings = Settings()
     embedding_model = get_embedding_model()
@@ -30,11 +30,27 @@ def _build_pipeline():
 
     return Pipeline(
         settings=settings,
-        chunker=Chunker(embedding_model=embedding_model, chunk_size=settings.chunk_size, chunk_overlap=settings.chunk_overlap, top_k=settings.top_k_chunks),
+        chunker=Chunker(
+            embedding_model=embedding_model,
+            chunk_size=settings.chunk_size,
+            chunk_overlap=settings.chunk_overlap,
+            top_k=settings.top_k_chunks,
+        ),
         nli_verifier=NLIVerifier(tokenizer=tokenizer, model=nli_model),
         similarity_verifier=SimilarityVerifier(embedding_model=embedding_model),
-        consistency_verifier=ConsistencyVerifier(embedding_model=embedding_model, base_url=settings.ollama_base_url, model=settings.ollama_model, n_samples=settings.consistency_samples, temperature=settings.consistency_temperature, similarity_threshold=settings.consistency_similarity_threshold),
-        ensemble=EnsembleScorer(nli_weight=settings.nli_weight, consistency_weight=settings.consistency_weight, similarity_weight=settings.similarity_weight),
+        consistency_verifier=ConsistencyVerifier(
+            embedding_model=embedding_model,
+            base_url=settings.ollama_base_url,
+            model=settings.ollama_model,
+            n_samples=settings.consistency_samples,
+            temperature=settings.consistency_temperature,
+            similarity_threshold=settings.consistency_similarity_threshold,
+        ),
+        ensemble=EnsembleScorer(
+            nli_weight=settings.nli_weight,
+            consistency_weight=settings.consistency_weight,
+            similarity_weight=settings.similarity_weight,
+        ),
     )
 
 
@@ -82,8 +98,14 @@ def check(
             nli_details = sc.verifier_details.get("nli", {})
             cons_details = sc.verifier_details.get("consistency", {})
             sim_details = sc.verifier_details.get("similarity", {})
-            row.append(f"e:{nli_details.get('entailment', 0):.2f} n:{nli_details.get('neutral', 0):.2f} c:{nli_details.get('contradiction', 0):.2f}")
-            row.append(f"{cons_details.get('appearances', '?')}/{cons_details.get('n_samples', '?')}")
+            row.append(
+                f"e:{nli_details.get('entailment', 0):.2f} "
+                f"n:{nli_details.get('neutral', 0):.2f} "
+                f"c:{nli_details.get('contradiction', 0):.2f}"
+            )
+            row.append(
+                f"{cons_details.get('appearances', '?')}/{cons_details.get('n_samples', '?')}"
+            )
             row.append(f"{sim_details.get('max_similarity', 0):.2f}")
         table.add_row(*row)
 

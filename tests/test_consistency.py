@@ -1,6 +1,8 @@
-import pytest
+from unittest.mock import MagicMock, patch
+
 import numpy as np
-from unittest.mock import AsyncMock, MagicMock, patch
+import pytest
+
 from backend.core.verifiers.consistency import ConsistencyVerifier
 
 
@@ -43,13 +45,15 @@ async def test_consistency_all_samples_agree():
         similarity_threshold=0.85,
     )
 
-    with patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate):
-        with patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose):
-            results = await verifier.verify(
-                claims=["Einstein was born in 1879."],
-                context_chunks=["Albert Einstein was born in 1879."],
-                question="When was Einstein born?",
-            )
+    with (
+        patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate),
+        patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose),
+    ):
+        results = await verifier.verify(
+            claims=["Einstein was born in 1879."],
+            context_chunks=["Albert Einstein was born in 1879."],
+            question="When was Einstein born?",
+        )
 
     assert len(results) == 1
     assert results[0].hallucination_score == 0.0
@@ -77,13 +81,15 @@ async def test_consistency_no_samples_agree():
         similarity_threshold=0.85,
     )
 
-    with patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate):
-        with patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose):
-            results = await verifier.verify(
-                claims=["Einstein was born in 1879."],
-                context_chunks=["Context."],
-                question="When was Einstein born?",
-            )
+    with (
+        patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate),
+        patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose),
+    ):
+        results = await verifier.verify(
+            claims=["Einstein was born in 1879."],
+            context_chunks=["Context."],
+            question="When was Einstein born?",
+        )
 
     assert len(results) == 1
     assert results[0].hallucination_score == 1.0
@@ -108,13 +114,15 @@ async def test_consistency_details():
         similarity_threshold=0.85,
     )
 
-    with patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate):
-        with patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose):
-            results = await verifier.verify(
-                claims=["Einstein was born in 1879."],
-                context_chunks=["Context."],
-                question="When was Einstein born?",
-            )
+    with (
+        patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate),
+        patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose),
+    ):
+        results = await verifier.verify(
+            claims=["Einstein was born in 1879."],
+            context_chunks=["Context."],
+            question="When was Einstein born?",
+        )
 
     assert results[0].details["verifier"] == "consistency"
     assert results[0].details["n_samples"] == 3
@@ -143,12 +151,14 @@ async def test_consistency_uses_real_question():
         similarity_threshold=0.85,
     )
 
-    with patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate):
-        with patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose):
-            await verifier.verify(
-                claims=["Einstein was born in 1879."],
-                context_chunks=["Albert Einstein was born in 1879."],
-                question="When was Einstein born?",
-            )
+    with (
+        patch("backend.core.verifiers.consistency.generate_answer", side_effect=mock_generate),
+        patch("backend.core.verifiers.consistency.decompose_claims", side_effect=mock_decompose),
+    ):
+        await verifier.verify(
+            claims=["Einstein was born in 1879."],
+            context_chunks=["Albert Einstein was born in 1879."],
+            question="When was Einstein born?",
+        )
 
     assert all(q == "When was Einstein born?" for q in captured_questions)

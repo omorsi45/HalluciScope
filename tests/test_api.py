@@ -1,9 +1,11 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from httpx import AsyncClient, ASGITransport
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+
 from backend.api.app import create_app
+from backend.core.ensemble import ConfidenceTier, ScoredClaim
 from backend.core.pipeline import AnalysisResult
-from backend.core.ensemble import ScoredClaim, ConfidenceTier
 
 
 @pytest.fixture

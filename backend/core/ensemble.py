@@ -1,10 +1,10 @@
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from backend.core.verifiers.base import ClaimScore
 
 
-class ConfidenceTier(str, Enum):
+class ConfidenceTier(StrEnum):
     SUPPORTED = "supported"       # < 0.2
     UNCERTAIN = "uncertain"       # 0.2 - 0.6
     HALLUCINATED = "hallucinated" # > 0.6
@@ -44,7 +44,7 @@ class EnsembleScorer:
         similarity_scores: list[ClaimScore],
     ) -> list[ScoredClaim]:
         results = []
-        for nli, cons, sim in zip(nli_scores, consistency_scores, similarity_scores):
+        for nli, cons, sim in zip(nli_scores, consistency_scores, similarity_scores, strict=False):
             combined = (
                 self.nli_weight * nli.hallucination_score
                 + self.consistency_weight * cons.hallucination_score

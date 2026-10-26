@@ -54,3 +54,19 @@ addopts = "-m 'not models'"
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+extend-exclude = [".worktrees", ".superpowers", ".local", "docs/superpowers"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC", "RUF"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = [
+    "typer.Option",
+    "typer.Argument",
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Cookie",
+]

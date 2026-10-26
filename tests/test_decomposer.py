@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from backend.core.decomposer import DECOMPOSE_SYSTEM, decompose_claims, parse_claims_response
 
 

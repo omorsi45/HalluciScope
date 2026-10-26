@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
+
 from backend.core.verifiers.nli import NLIVerifier
 
 # Label order of cross-encoder/nli-deberta-v3-large

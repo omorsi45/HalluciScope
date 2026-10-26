@@ -1,6 +1,7 @@
 import json
-import numpy as np
+
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def plot_calibration(results_path: str, output_path: str, n_bins: int = 10):
@@ -23,7 +24,7 @@ def plot_calibration(results_path: str, output_path: str, n_bins: int = 10):
             bin_centers.append((bin_edges[i] + bin_edges[i + 1]) / 2)
             bin_accuracies.append(y_true[mask].mean())
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    _fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
     ax1.plot([0, 1], [0, 1], "k--", label="Perfect calibration")
     ax1.bar(bin_centers, bin_accuracies, width=1 / n_bins, alpha=0.7, edgecolor="black")

@@ -1,4 +1,5 @@
 import pytest
+
 from backend.db.repository import Repository
 
 
@@ -59,7 +60,12 @@ async def test_save_and_list_feedback(tmp_db_path):
     await repo.init()
 
     analysis_id = await repo.save_analysis("Q?", "Doc", "A", 0.5, [
-        {"claim": "Claim.", "hallucination_score": 0.5, "tier": "uncertain", "verifier_details": {}},
+        {
+            "claim": "Claim.",
+            "hallucination_score": 0.5,
+            "tier": "uncertain",
+            "verifier_details": {},
+        },
     ])
 
     await repo.save_feedback(

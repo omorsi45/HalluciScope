@@ -1,4 +1,3 @@
-from pathlib import Path
 from backend.core.document import parse_document
 
 
@@ -19,7 +18,6 @@ def test_parse_pdf_file(tmp_path):
     from pypdf import PdfWriter
     writer = PdfWriter()
     writer.add_blank_page(width=72, height=72)
-    page = writer.pages[0]
     pdf_path = tmp_path / "test.pdf"
     writer.write(str(pdf_path))
     result = parse_document(file_path=pdf_path)
@@ -29,6 +27,6 @@ def test_parse_pdf_file(tmp_path):
 def test_parse_requires_input():
     try:
         parse_document()
-        assert False, "Should have raised ValueError"
+        raise AssertionError("Should have raised ValueError")
     except ValueError as e:
         assert "Either text or file_path" in str(e)

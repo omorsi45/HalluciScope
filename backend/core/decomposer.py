@@ -2,7 +2,8 @@ import re
 
 from backend.core.generator import chat_completion
 
-DECOMPOSE_SYSTEM = """You are a claim decomposition system. Your job is to split an answer into independent, verifiable factual statements.
+DECOMPOSE_SYSTEM = """You are a claim decomposition system. Your job is to \
+split an answer into independent, verifiable factual statements.
 
 Rules:
 - Each claim must be a single, standalone factual statement
@@ -18,7 +19,8 @@ Claims:
 2. Einstein was born in Ulm.
 3. Einstein developed relativity."""
 
-DECOMPOSE_USER = """Split this answer into independent, verifiable factual claims. Number each claim.
+DECOMPOSE_USER = """Split this answer into independent, verifiable factual claims. \
+Number each claim.
 
 Answer: {answer}
 

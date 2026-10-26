@@ -1,11 +1,12 @@
-import pytest
 import hashlib
-from collections import OrderedDict
 from unittest.mock import AsyncMock, MagicMock, patch
-from backend.core.pipeline import Pipeline, AnalysisResult
+
+import pytest
+
 from backend.core.chunker import DocumentIndex
+from backend.core.ensemble import ConfidenceTier, ScoredClaim
+from backend.core.pipeline import AnalysisResult, Pipeline
 from backend.core.verifiers.base import ClaimScore
-from backend.core.ensemble import ScoredClaim, ConfidenceTier
 
 
 def _make_settings():
@@ -41,9 +42,16 @@ async def test_pipeline_analyze(mock_pipeline):
         with patch("backend.core.pipeline.decompose_claims", new_callable=AsyncMock) as mock_decomp:
             mock_decomp.return_value = ["Einstein was born in 1879."]
 
-            nli_score = ClaimScore(claim="Einstein was born in 1879.", hallucination_score=0.1, details={"verifier": "nli"})
-            cons_score = ClaimScore(claim="Einstein was born in 1879.", hallucination_score=0.0, details={"verifier": "consistency"})
-            sim_score = ClaimScore(claim="Einstein was born in 1879.", hallucination_score=0.2, details={"verifier": "similarity"})
+            claim_text = "Einstein was born in 1879."
+            nli_score = ClaimScore(
+                claim=claim_text, hallucination_score=0.1, details={"verifier": "nli"}
+            )
+            cons_score = ClaimScore(
+                claim=claim_text, hallucination_score=0.0, details={"verifier": "consistency"}
+            )
+            sim_score = ClaimScore(
+                claim=claim_text, hallucination_score=0.2, details={"verifier": "similarity"}
+            )
 
             mock_pipeline.nli_verifier.verify = AsyncMock(return_value=[nli_score])
             mock_pipeline.similarity_verifier.verify = AsyncMock(return_value=[sim_score])
@@ -102,8 +110,18 @@ async def test_pipeline_overall_score(mock_pipeline):
             mock_pipeline.consistency_verifier.verify = AsyncMock(return_value=cons_scores)
 
             scored = [
-                ScoredClaim(claim="Claim A.", hallucination_score=0.07, tier=ConfidenceTier.SUPPORTED, verifier_details={}),
-                ScoredClaim(claim="Claim B.", hallucination_score=0.83, tier=ConfidenceTier.HALLUCINATED, verifier_details={}),
+                ScoredClaim(
+                    claim="Claim A.",
+                    hallucination_score=0.07,
+                    tier=ConfidenceTier.SUPPORTED,
+                    verifier_details={},
+                ),
+                ScoredClaim(
+                    claim="Claim B.",
+                    hallucination_score=0.83,
+                    tier=ConfidenceTier.HALLUCINATED,
+                    verifier_details={},
+                ),
             ]
             mock_pipeline.ensemble.score = MagicMock(return_value=scored)
 
@@ -145,5 +163,5 @@ async def test_pipeline_cache_evicts_oldest(mock_pipeline):
             await mock_pipeline.analyze(document_text="Doc C.", question="Q?")
 
     assert len(mock_pipeline._index_cache) == 2
-    hash_a = hashlib.sha256("Doc A.".encode()).hexdigest()
+    hash_a = hashlib.sha256(b"Doc A.").hexdigest()
     assert hash_a not in mock_pipeline._index_cache

@@ -1,10 +1,10 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from typer.testing import CliRunner
-from backend.cli.main import app
-from backend.core.pipeline import AnalysisResult
-from backend.core.ensemble import ScoredClaim, ConfidenceTier
 
+from typer.testing import CliRunner
+
+from backend.cli.main import app
+from backend.core.ensemble import ConfidenceTier, ScoredClaim
+from backend.core.pipeline import AnalysisResult
 
 runner = CliRunner()
 
@@ -22,9 +22,19 @@ def test_check_command(tmp_path):
                 hallucination_score=0.1,
                 tier=ConfidenceTier.SUPPORTED,
                 verifier_details={
-                    "nli": {"verifier": "nli", "entailment": 0.9, "neutral": 0.05, "contradiction": 0.05, "matched_chunk": ""},
+                    "nli": {
+                        "verifier": "nli",
+                        "entailment": 0.9,
+                        "neutral": 0.05,
+                        "contradiction": 0.05,
+                        "matched_chunk": "",
+                    },
                     "consistency": {"verifier": "consistency", "appearances": 5, "n_samples": 5},
-                    "similarity": {"verifier": "similarity", "max_similarity": 0.92, "matched_chunk": ""},
+                    "similarity": {
+                        "verifier": "similarity",
+                        "max_similarity": 0.92,
+                        "matched_chunk": "",
+                    },
                 },
             )
         ],
@@ -60,9 +70,19 @@ def test_check_verbose(tmp_path):
                 hallucination_score=0.3,
                 tier=ConfidenceTier.UNCERTAIN,
                 verifier_details={
-                    "nli": {"verifier": "nli", "entailment": 0.6, "neutral": 0.3, "contradiction": 0.1, "matched_chunk": ""},
+                    "nli": {
+                        "verifier": "nli",
+                        "entailment": 0.6,
+                        "neutral": 0.3,
+                        "contradiction": 0.1,
+                        "matched_chunk": "",
+                    },
                     "consistency": {"verifier": "consistency", "appearances": 3, "n_samples": 5},
-                    "similarity": {"verifier": "similarity", "max_similarity": 0.75, "matched_chunk": ""},
+                    "similarity": {
+                        "verifier": "similarity",
+                        "max_similarity": 0.75,
+                        "matched_chunk": "",
+                    },
                 },
             )
         ],

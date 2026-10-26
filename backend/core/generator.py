@@ -1,6 +1,7 @@
 import httpx
 
-RAG_SYSTEM_PROMPT = """You are a helpful assistant that answers questions based only on the provided context.
+RAG_SYSTEM_PROMPT = """You are a helpful assistant that answers questions based only on the \
+provided context.
 If the context doesn't contain enough information to answer, say so. Do not make up information."""
 
 RAG_USER_TEMPLATE = """Context:
@@ -49,16 +50,16 @@ async def chat_completion(
             response.raise_for_status()
             return response.json()["message"]["content"]
 
-    except httpx.ConnectError:
+    except httpx.ConnectError as exc:
         raise OllamaError(
             f"Could not connect to Ollama at {base_url}. "
             "Make sure Ollama is running (`ollama serve`)."
-        )
-    except httpx.TimeoutException:
+        ) from exc
+    except httpx.TimeoutException as exc:
         raise OllamaError(
             f"Request to Ollama timed out (model={model!r}). "
             "The model may still be loading — try again in a moment."
-        )
+        ) from exc
     except httpx.HTTPStatusError as exc:
         raise OllamaError(
             f"Ollama returned HTTP {exc.response.status_code} for model {model!r}. "

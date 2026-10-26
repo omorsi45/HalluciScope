@@ -3,16 +3,16 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import FastAPI
 
+from backend.api.app import create_app
 from backend.config import Settings
-from backend.models.loader import get_embedding_model, get_nli_model
 from backend.core.chunker import Chunker
-from backend.core.verifiers.nli import NLIVerifier
-from backend.core.verifiers.similarity import SimilarityVerifier
-from backend.core.verifiers.consistency import ConsistencyVerifier
 from backend.core.ensemble import EnsembleScorer
 from backend.core.pipeline import Pipeline
+from backend.core.verifiers.consistency import ConsistencyVerifier
+from backend.core.verifiers.nli import NLIVerifier
+from backend.core.verifiers.similarity import SimilarityVerifier
 from backend.db.repository import Repository
-from backend.api.app import create_app
+from backend.models.loader import get_embedding_model, get_nli_model
 
 
 def create_configured_app() -> FastAPI:
