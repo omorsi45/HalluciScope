@@ -1,6 +1,6 @@
 import re
 
-from backend.core.generator import generate_answer
+from backend.core.generator import chat_completion
 
 DECOMPOSE_SYSTEM = """You are a claim decomposition system. Your job is to split an answer into independent, verifiable factual statements.
 
@@ -51,13 +51,9 @@ async def decompose_claims(
     client=None,
 ) -> list[str]:
     """Decompose an answer into atomic verifiable claims using the LLM."""
-    prompt = DECOMPOSE_USER.format(answer=answer)
-    raw = await generate_answer(
-        question=prompt,
-        context_chunks=[],
-        base_url=base_url,
-        model=model,
-        temperature=0.0,
-        client=client,
-    )
+    messages = [
+        {"role": "system", "content": DECOMPOSE_SYSTEM},
+        {"role": "user", "content": DECOMPOSE_USER.format(answer=answer)},
+    ]
+    raw = await chat_completion(messages, base_url, model, 0.0, client)
     return parse_claims_response(raw)

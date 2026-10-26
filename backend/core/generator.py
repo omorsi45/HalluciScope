@@ -15,15 +15,14 @@ class OllamaError(RuntimeError):
     """Raised when the Ollama API is unreachable, times out, or returns an error."""
 
 
-async def generate_answer(
-    question: str,
-    context_chunks: list[str],
+async def chat_completion(
+    messages: list[dict[str, str]],
     base_url: str,
     model: str,
     temperature: float = 0.0,
     client: httpx.AsyncClient | None = None,
 ) -> str:
-    """Generate an answer using Ollama given context chunks and a question.
+    """Send chat messages to Ollama and return the reply content.
 
     If a shared client is provided it is used directly. Otherwise a
     temporary client is created for this call (preserves CLI compatibility).
@@ -32,15 +31,9 @@ async def generate_answer(
         OllamaError: If Ollama is unreachable, times out, or returns an error
             status. The message includes actionable guidance for each case.
     """
-    context = "\n\n".join(context_chunks)
-    user_message = RAG_USER_TEMPLATE.format(context=context, question=question)
-
     payload = {
         "model": model,
-        "messages": [
-            {"role": "system", "content": RAG_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
+        "messages": messages,
         "stream": False,
         "options": {"temperature": temperature},
     }
@@ -71,3 +64,29 @@ async def generate_answer(
             f"Ollama returned HTTP {exc.response.status_code} for model {model!r}. "
             f"Response: {exc.response.text[:200]}"
         ) from exc
+
+
+async def generate_answer(
+    question: str,
+    context_chunks: list[str],
+    base_url: str,
+    model: str,
+    temperature: float = 0.0,
+    client: httpx.AsyncClient | None = None,
+) -> str:
+    """Generate an answer using Ollama given context chunks and a question.
+
+    If a shared client is provided it is used directly. Otherwise a
+    temporary client is created for this call (preserves CLI compatibility).
+
+    Raises:
+        OllamaError: If Ollama is unreachable, times out, or returns an error
+            status. The message includes actionable guidance for each case.
+    """
+    context = "\n\n".join(context_chunks)
+    user_message = RAG_USER_TEMPLATE.format(context=context, question=question)
+    messages = [
+        {"role": "system", "content": RAG_SYSTEM_PROMPT},
+        {"role": "user", "content": user_message},
+    ]
+    return await chat_completion(messages, base_url, model, temperature, client)
