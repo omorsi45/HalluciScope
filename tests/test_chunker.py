@@ -29,7 +29,7 @@ def test_build_index_returns_document_index(sample_document_text):
     assert isinstance(doc_index, DocumentIndex)
     assert len(doc_index.chunks) > 1
     assert doc_index.embeddings.shape[0] == len(doc_index.chunks)
-    assert doc_index.faiss_index is not None
+    assert "faiss_index" not in DocumentIndex.__dataclass_fields__
 
 
 def test_build_index_is_stateless(sample_document_text):
@@ -71,3 +71,17 @@ def test_concurrent_indexes_do_not_interfere(sample_document_text):
         assert chunk in idx1.chunks
     for chunk in r2:
         assert chunk in idx2.chunks
+
+
+def test_retrieve_orders_by_cosine():
+    """Chunks rank by descending dot product; ties keep the lower chunk index."""
+    vectors = {"q": [1.0, 0.0]}
+    embedder = MagicMock()
+    embedder.encode = lambda texts, **kwargs: np.array([vectors[t] for t in texts])
+    chunker = Chunker(embedding_model=embedder)
+    idx = DocumentIndex(
+        chunks=["a", "b", "c"],
+        embeddings=np.array([[0.0, 1.0], [0.8, 0.6], [1.0, 0.0]], dtype=np.float32),
+    )
+
+    assert chunker.retrieve("q", idx, top_k=2) == ["c", "b"]

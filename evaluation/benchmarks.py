@@ -1,20 +1,41 @@
 import json
 from pathlib import Path
 
-from sklearn.metrics import precision_score, recall_score, f1_score, roc_auc_score
+
+def _auc_roc(y_true: list[int], y_scores: list[float]) -> float | None:
+    """AUC-ROC via the rank-sum formula; None when only one class is present."""
+    n_pos = sum(1 for y in y_true if y == 1)
+    n_neg = len(y_true) - n_pos
+    if n_pos == 0 or n_neg == 0:
+        return None
+    order = sorted(range(len(y_scores)), key=lambda i: y_scores[i])
+    ranks = [0.0] * len(y_scores)
+    i = 0
+    while i < len(order):
+        j = i
+        while j + 1 < len(order) and y_scores[order[j + 1]] == y_scores[order[i]]:
+            j += 1
+        avg_rank = (i + j) / 2 + 1  # average 1-based rank for tied scores
+        for k in range(i, j + 1):
+            ranks[order[k]] = avg_rank
+        i = j + 1
+    rank_sum = sum(r for r, y in zip(ranks, y_true) if y == 1)
+    return (rank_sum - n_pos * (n_pos + 1) / 2) / (n_pos * n_neg)
 
 
 def compute_metrics(y_true: list[int], y_pred: list[int], y_scores: list[float]) -> dict:
-    metrics = {
-        "precision": precision_score(y_true, y_pred, zero_division=0),
-        "recall": recall_score(y_true, y_pred, zero_division=0),
-        "f1": f1_score(y_true, y_pred, zero_division=0),
+    tp = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 1)
+    fp = sum(1 for t, p in zip(y_true, y_pred) if t == 0 and p == 1)
+    fn = sum(1 for t, p in zip(y_true, y_pred) if t == 1 and p == 0)
+    precision = tp / (tp + fp) if tp + fp else 0.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "auc_roc": _auc_roc(y_true, y_scores),
     }
-    try:
-        metrics["auc_roc"] = roc_auc_score(y_true, y_scores)
-    except ValueError:
-        metrics["auc_roc"] = None
-    return metrics
 
 
 async def run_benchmark(dataset: str, output_dir: str, threshold: float = 0.5):

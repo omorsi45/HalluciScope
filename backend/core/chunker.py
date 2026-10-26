@@ -1,5 +1,4 @@
 import numpy as np
-import faiss
 from dataclasses import dataclass
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -13,7 +12,6 @@ class DocumentIndex:
     """
     chunks: list[str]
     embeddings: np.ndarray
-    faiss_index: faiss.IndexFlatIP
 
 
 class Chunker:
@@ -39,19 +37,17 @@ class Chunker:
         self.top_k = top_k
 
     def build_index(self, text: str) -> DocumentIndex:
-        """Split text into chunks, embed them, and return a FAISS-backed index."""
+        """Split text into chunks, embed them, and return the index."""
         chunks = self.splitter.split_text(text)
         embeddings = self.embedding_model.encode(chunks, normalize_embeddings=True)
         embeddings = np.array(embeddings, dtype=np.float32)
-        dim = embeddings.shape[1]
-        index = faiss.IndexFlatIP(dim)
-        index.add(embeddings)
-        return DocumentIndex(chunks=chunks, embeddings=embeddings, faiss_index=index)
+        return DocumentIndex(chunks=chunks, embeddings=embeddings)
 
     def retrieve(self, query: str, doc_index: DocumentIndex, top_k: int | None = None) -> list[str]:
         """Retrieve the top-k most similar chunks for a query."""
         k = min(top_k or self.top_k, len(doc_index.chunks))
         query_vec = self.embedding_model.encode([query], normalize_embeddings=True)
         query_vec = np.array(query_vec, dtype=np.float32)
-        _, indices = doc_index.faiss_index.search(query_vec, k)
-        return [doc_index.chunks[i] for i in indices[0] if i < len(doc_index.chunks)]
+        scores = doc_index.embeddings @ query_vec[0]
+        order = np.argsort(-scores, kind="stable")[:k]
+        return [doc_index.chunks[i] for i in order]
