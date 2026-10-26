@@ -30,7 +30,7 @@ start() {
     "$PG_BIN/initdb" -D "$PGDATA" -U postgres --auth=trust -E UTF8 --locale=en_US.UTF-8
   fi
   if ! is_running; then
-    "$PG_BIN/pg_ctl" -D "$PGDATA" -o "-p $PGPORT -k $ROOT/.local" -l "$PGLOG" start
+    "$PG_BIN/pg_ctl" -D "$PGDATA" -o "-p $PGPORT -k '$ROOT/.local'" -l "$PGLOG" start
   fi
   until "$PG_BIN/pg_isready" -h localhost -p "$PGPORT" -q; do
     sleep 0.5

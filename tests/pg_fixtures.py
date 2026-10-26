@@ -72,8 +72,8 @@ async def fresh_db_url():
     """Yield the eg_owner URL of a throwaway database, dropped afterwards."""
     await ensure_roles()
     name = f"eg_tmp_{uuid.uuid4().hex[:8]}"
-    await create_database(name)
     try:
+        await create_database(name)
         yield role_url("eg_owner", name)
     finally:
         await drop_database(name)

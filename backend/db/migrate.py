@@ -56,6 +56,17 @@ async def _applied(conn: psycopg.AsyncConnection) -> dict[int, str]:
     return {version: checksum for version, checksum in await cur.fetchall()}
 
 
+async def _bootstrap(conn: psycopg.AsyncConnection) -> dict[int, str]:
+    """Create schema_migrations and read it, serialized by the advisory lock.
+
+    `create table if not exists` is not concurrency-safe, so the lock comes first.
+    """
+    async with conn.transaction():
+        await conn.execute("select pg_advisory_xact_lock(%s)", (_LOCK_KEY,))
+        await conn.execute(_CREATE_TABLE)
+        return await _applied(conn)
+
+
 def _verify(migrations: list[Migration], applied: dict[int, str]) -> None:
     for migration in migrations:
         recorded = applied.get(migration.version)
@@ -69,8 +80,7 @@ async def migrate(url: str, directory: Path = MIGRATIONS_DIR) -> list[int]:
     migrations = discover(directory)
     newly_applied: list[int] = []
     async with await psycopg.AsyncConnection.connect(url, autocommit=True) as conn:
-        await conn.execute(_CREATE_TABLE)
-        _verify(migrations, await _applied(conn))
+        _verify(migrations, await _bootstrap(conn))
         for migration in migrations:
             async with conn.transaction():
                 await conn.execute("select pg_advisory_xact_lock(%s)", (_LOCK_KEY,))
@@ -91,6 +101,5 @@ async def migrate(url: str, directory: Path = MIGRATIONS_DIR) -> list[int]:
 async def pending(url: str, directory: Path = MIGRATIONS_DIR) -> list[int]:
     migrations = discover(directory)
     async with await psycopg.AsyncConnection.connect(url, autocommit=True) as conn:
-        await conn.execute(_CREATE_TABLE)
-        applied = await _applied(conn)
+        applied = await _bootstrap(conn)
     return [m.version for m in migrations if m.version not in applied]

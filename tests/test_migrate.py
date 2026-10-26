@@ -1,3 +1,6 @@
+import asyncio
+import uuid
+
 import psycopg
 import pytest
 
@@ -9,6 +12,7 @@ from backend.db.migrate import (
     migrate,
     pending,
 )
+from tests.pg_fixtures import create_database, drop_database, role_url
 
 
 def test_discover_orders_and_ignores_other_files(tmp_path):
@@ -64,6 +68,29 @@ async def test_migrate_applies_once(fresh_db_url, tmp_path):
     assert await pending(fresh_db_url, tmp_path) == []
     assert await _table_exists(fresh_db_url, "t1")
     assert await _table_exists(fresh_db_url, "t2")
+
+
+@pytest.mark.pg
+async def test_concurrent_migrate_on_fresh_database(fresh_db_url, tmp_path):
+    (tmp_path / "0001_one.sql").write_text("create table t1(id int);")
+    (tmp_path / "0002_two.sql").write_text("create table t2(id int);")
+
+    extra = [f"eg_tmp_{uuid.uuid4().hex[:8]}" for _ in range(4)]
+    urls = [fresh_db_url]
+    try:
+        for name in extra:
+            await create_database(name)
+            urls.append(role_url("eg_owner", name))
+
+        for url in urls:
+            results = await asyncio.gather(
+                migrate(url, tmp_path), migrate(url, tmp_path), return_exceptions=True
+            )
+            assert not any(isinstance(r, BaseException) for r in results), results
+            assert sorted(results) == [[], [1, 2]]
+    finally:
+        for name in extra:
+            await drop_database(name)
 
 
 @pytest.mark.pg
