@@ -46,9 +46,10 @@ async def get(conn: AsyncConnection, key_id: UUID, tenant_id: UUID) -> dict[str,
 async def list_for_user(
     conn: AsyncConnection, tenant_id: UUID, user_id: UUID
 ) -> list[dict[str, Any]]:
+    """Active (not revoked) keys only."""
     cur = await conn.execute(
         f"select {_PUBLIC} from api_keys where tenant_id = %s and user_id = %s "
-        "order by created_at, id",
+        "and revoked_at is null order by created_at, id",
         (tenant_id, user_id),
     )
     return await cur.fetchall()

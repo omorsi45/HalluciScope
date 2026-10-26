@@ -1,14 +1,20 @@
+import asyncio
 import uuid
+from contextlib import AsyncExitStack
 from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
+import pytest_asyncio
 from fastapi import FastAPI
 
 from backend.api.errors import install_error_handlers
+from backend.auth import service as auth_service
 from backend.auth.service import AuthError, AuthService, Principal
 from backend.auth.tokens import token_hash
 from backend.config import Settings
+from backend.db.pool import Database
+from backend.db.repos import users
 
 pytestmark = pytest.mark.pg
 
@@ -417,3 +423,178 @@ async def test_auth_error_maps_to_problem_response():
     assert body["code"] == "too_many_attempts"
     assert body["status"] == 429
     assert body["title"] == "Too many attempts"
+
+
+@pytest_asyncio.fixture
+async def wide_db(pg_urls, db):
+    """Ten-connection Database on the same database; `db` empties the tables afterwards."""
+    database = Database(pg_urls["app"], max_size=10)
+    await database.open()
+    try:
+        yield database
+    finally:
+        await database.close()
+
+
+async def test_concurrent_wrong_passwords_respect_email_limit(auth, wide_db, clock):
+    await _register(auth)
+    concurrent = AuthService(wide_db, Settings(), clock=clock)
+
+    results = await asyncio.gather(
+        *(
+            concurrent.login("alice@example.com", "wrong password!!", ip="1.1.1.1")
+            for _ in range(20)
+        ),
+        return_exceptions=True,
+    )
+
+    codes = [r.code for r in results if isinstance(r, AuthError)]
+    assert len(codes) == 20
+    assert codes.count("invalid_credentials") == 5
+    assert codes.count("too_many_attempts") == 15
+    rows = await _fetch(
+        wide_db, "select failures from auth_throttle where key = 'email:alice@example.com'"
+    )
+    assert [r["failures"] for r in rows] == [5]
+
+
+async def _all_connections_free(database, size):
+    """True when `size` connections can be held at once, i.e. none is held elsewhere."""
+    try:
+        async with AsyncExitStack() as stack:
+            for _ in range(size):
+                await asyncio.wait_for(stack.enter_async_context(database.system_tx()), 2)
+    except TimeoutError:
+        return False
+    return True
+
+
+@pytest.mark.parametrize("known_email", [True, False])
+async def test_no_connection_held_during_password_verification(
+    monkeypatch, pg_urls, db, clock, known_email
+):
+    small = Database(pg_urls["app"], max_size=3)
+    await small.open()
+    try:
+        service = AuthService(small, Settings(), clock=clock)
+        await _register(service)
+        loop = asyncio.get_running_loop()
+        observed: list[bool] = []
+
+        def stub(*_args):
+            future = asyncio.run_coroutine_threadsafe(_all_connections_free(small, 3), loop)
+            observed.append(future.result(timeout=15))
+            return False
+
+        monkeypatch.setattr(auth_service, "verify_password", stub)
+        monkeypatch.setattr(auth_service, "verify_dummy", stub)
+
+        email = "alice@example.com" if known_email else "nobody@example.com"
+        await _expect_code(
+            service.login(email, "wrong password!!", ip="1.1.1.1"), "invalid_credentials", 401
+        )
+
+        assert observed == [True]
+    finally:
+        await small.close()
+
+
+async def test_ip_throttled_attempt_does_not_count_against_email(auth):
+    await _register(auth)
+    for i in range(20):
+        await _expect_code(
+            auth.login(f"user{i}@example.com", PASSWORD, ip="9.9.9.9"),
+            "invalid_credentials",
+            401,
+        )
+
+    await _expect_code(
+        auth.login("alice@example.com", "wrong password!!", ip="9.9.9.9"),
+        "too_many_attempts",
+        429,
+    )
+
+    for _ in range(5):
+        await _expect_code(
+            auth.login("alice@example.com", "wrong password!!", ip="8.8.8.8"),
+            "invalid_credentials",
+            401,
+        )
+
+
+async def test_successful_login_does_not_consume_ip_budget(auth):
+    await _register(auth)
+    for _ in range(25):
+        await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")
+
+    for i in range(20):
+        await _expect_code(
+            auth.login(f"user{i}@example.com", PASSWORD, ip="1.1.1.1"),
+            "invalid_credentials",
+            401,
+        )
+
+
+async def test_disabled_user_rejected_everywhere(auth, db):
+    user_id, _ = await _register(auth)
+    result = await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")
+    _, token = await auth.create_api_key(result.principal, "ci")
+
+    async with db.system_tx() as conn:
+        await conn.execute("update users set disabled_at = now() where id = %s", (user_id,))
+
+    assert await auth.resolve_session(result.session_token) is None
+    assert await auth.resolve_api_key(token) is None
+    await _expect_code(
+        auth.login("alice@example.com", PASSWORD, ip="1.1.1.1"), "invalid_credentials", 401
+    )
+
+
+async def test_forged_api_key_with_matching_prefix_rejected(auth):
+    await _register(auth)
+    principal = (await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")).principal
+    info, token = await auth.create_api_key(principal, "ci")
+    forged = f"egk_{info['prefix']}_" + "A" * 43
+
+    assert forged != token
+    assert await auth.resolve_api_key(forged) is None
+    assert await auth.resolve_api_key(token) is not None
+
+
+async def test_owner_of_other_tenant_cannot_revoke_key(auth):
+    await _register(auth)
+    alice = (await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")).principal
+    info, token = await auth.create_api_key(alice, "ci")
+    await _register(auth, "bob@example.com", "Bob")
+    bob = (await auth.login("bob@example.com", PASSWORD, ip="1.1.1.1")).principal
+    assert bob.role == "owner"
+    assert bob.tenant_id != alice.tenant_id
+
+    await _expect_code(auth.revoke_api_key(bob, info["id"]), "not_found", 404)
+    assert await auth.resolve_api_key(token) is not None
+
+
+async def test_list_api_keys_returns_only_active_keys(auth):
+    await _register(auth)
+    principal = (await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")).principal
+    kept, _ = await auth.create_api_key(principal, "kept")
+    revoked, _ = await auth.create_api_key(principal, "revoked")
+
+    await auth.revoke_api_key(principal, revoked["id"])
+
+    assert [k["id"] for k in await auth.list_api_keys(principal)] == [kept["id"]]
+
+
+async def test_only_login_lookup_returns_password_hash(auth, db):
+    user_id, _ = await _register(auth)
+
+    async with db.system_tx() as conn:
+        by_email = await users.get_user_by_email(conn, "alice@example.com")
+        by_id = await users.get_user(conn, user_id)
+        record = await users.get_login_record(conn, "alice@example.com")
+
+    assert by_email is not None and by_id is not None and record is not None
+    assert "password_hash" not in by_email
+    assert "password_hash" not in by_id
+    assert record["password_hash"].startswith("scrypt$")
+    assert record["id"] == user_id

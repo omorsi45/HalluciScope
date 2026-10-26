@@ -128,61 +128,76 @@ class AuthService:
         email_key = f"email:{normalized}"
         ip_key = f"ip:{ip}"
 
+        # (a) Short transaction: look the user up and reserve the throttle slots atomically.
         async with self._db.system_tx() as conn:
-            user = await users.get_user_by_email(conn, normalized)
-            user_id = user["id"] if user else None
-
-            email_failures = await throttle.get_failures(conn, email_key, window)
-            ip_failures = await throttle.get_failures(conn, ip_key, window)
-            if email_failures >= _EMAIL_FAILURE_LIMIT or ip_failures >= _IP_FAILURE_LIMIT:
+            user = await users.get_login_record(conn, normalized)
+            reserved = await self._reserve_attempt(conn, email_key, ip_key, window)
+            if not reserved:
                 await audit.record(
                     conn,
                     action="login_throttled",
                     tenant_id=None,
-                    user_id=user_id,
+                    user_id=user["id"] if user else None,
                     details={"ip": ip},
                 )
-                outcome: LoginResult | AuthError = AuthError("too_many_attempts", 429)
-            else:
-                outcome = await self._check_credentials(
-                    conn, user, password, ip, now, window, email_key, ip_key
-                )
 
-        # Raised after the transaction closes so the throttle and audit rows commit.
-        if isinstance(outcome, AuthError):
-            raise outcome
-        return outcome
+        # Errors are raised outside the transactions so the reservation and audit rows commit.
+        if not reserved:
+            raise AuthError("too_many_attempts", 429)
 
-    async def _check_credentials(
-        self,
-        conn: Any,
-        user: dict[str, Any] | None,
-        password: str,
-        ip: str,
-        now: datetime,
-        window: datetime,
-        email_key: str,
-        ip_key: str,
-    ) -> LoginResult | AuthError:
+        # (b) No transaction or pooled connection is held while scrypt runs.
         if user is None:
             await asyncio.to_thread(verify_dummy, password)
             valid = False
         else:
             valid = await asyncio.to_thread(verify_password, password, user["password_hash"])
-        memberships = await tenants.list_memberships(conn, user["id"]) if user and valid else []
-        if not valid or user["disabled_at"] is not None or not memberships:
-            await throttle.record_failure(conn, email_key, window)
-            await throttle.record_failure(conn, ip_key, window)
-            await audit.record(
-                conn,
-                action="login_failed",
-                tenant_id=None,
-                user_id=user["id"] if user else None,
-                details={"ip": ip},
-            )
-            return AuthError("invalid_credentials", 401)
 
+        # (c) Short transaction: write the session and audit row, or the failure audit row.
+        async with self._db.system_tx() as conn:
+            result = None
+            if valid and user["disabled_at"] is None:
+                result = await self._open_session(conn, user, ip, now, window, email_key, ip_key)
+            if result is None:
+                await audit.record(
+                    conn,
+                    action="login_failed",
+                    tenant_id=None,
+                    user_id=user["id"] if user else None,
+                    details={"ip": ip},
+                )
+        if result is None:
+            raise AuthError("invalid_credentials", 401)
+        return result
+
+    async def _reserve_attempt(
+        self, conn: Any, email_key: str, ip_key: str, window: datetime
+    ) -> bool:
+        """Count this attempt against both keys, or against neither when either is full."""
+        if not await throttle.reserve(conn, email_key, window, _EMAIL_FAILURE_LIMIT):
+            return False
+        if not await throttle.reserve(conn, ip_key, window, _IP_FAILURE_LIMIT):
+            await throttle.release(conn, email_key, window)
+            return False
+        return True
+
+    async def _open_session(
+        self,
+        conn: Any,
+        user: dict[str, Any],
+        ip: str,
+        now: datetime,
+        window: datetime,
+        email_key: str,
+        ip_key: str,
+    ) -> LoginResult | None:
+        memberships = await tenants.list_memberships(conn, user["id"])
+        if not memberships:
+            return None
+
+        # The reserved attempt was optimistic: a success clears the email key and
+        # gives back the ip slot, so the ip key counts failures only.
         await throttle.clear(conn, email_key, window)
+        await throttle.release(conn, ip_key, window)
         membership = memberships[0]
         session_token = new_session_token()
         csrf_token = new_csrf_token()
