@@ -9,7 +9,9 @@ from backend.core.verifiers.base import BaseVerifier, ClaimScore
 class NLIVerifier(BaseVerifier):
     """Verify claims against source chunks using NLI (DeBERTa).
 
-    DeBERTa label order: [contradiction, neutral, entailment]
+    Label order is read from ``model.config.id2label`` (for
+    cross-encoder/nli-deberta-v3-large it is contradiction, entailment,
+    neutral), never assumed.
     Score mapping: hallucination = contradiction*1.0 + neutral*0.5 + entailment*0.0
 
     All claim×chunk pairs are tokenized as a single batch and run through
@@ -20,15 +22,17 @@ class NLIVerifier(BaseVerifier):
     def __init__(self, tokenizer, model):
         self.tokenizer = tokenizer
         self.model = model
+        names = {str(name).lower(): int(idx) for idx, name in model.config.id2label.items()}
+        required = ("contradiction", "entailment", "neutral")
+        if not all(name in names for name in required):
+            raise ValueError("NLI model labels must include contradiction, entailment, neutral")
+        self.label_index: dict[str, int] = {name: names[name] for name in required}
 
-    def _compute_hallucination_score(self, probs: np.ndarray) -> float:
-        """Map NLI probabilities to hallucination score.
-
-        Args:
-            probs: Array of [contradiction, neutral, entailment] probabilities.
-        """
-        weights = np.array([1.0, 0.5, 0.0])
-        return float(np.dot(probs, weights))
+    def _compute_hallucination_score(
+        self, contradiction: float, neutral: float, entailment: float
+    ) -> float:
+        """Map NLI probabilities to hallucination score."""
+        return float(contradiction + 0.5 * neutral)
 
     async def verify(
         self,
@@ -47,7 +51,7 @@ class NLIVerifier(BaseVerifier):
                 [p[0] for p in pairs],
                 [p[1] for p in pairs],
                 padding=True,
-                truncation=True,
+                truncation="only_first",
                 max_length=512,
                 return_tensors="pt",
             )
@@ -61,7 +65,17 @@ class NLIVerifier(BaseVerifier):
         results = []
         for i, claim in enumerate(claims):
             claim_probs = all_probs[i * n_chunks:(i + 1) * n_chunks]  # [K, 3]
-            scores = [self._compute_hallucination_score(p) for p in claim_probs]
+            c_i = self.label_index["contradiction"]
+            n_i = self.label_index["neutral"]
+            e_i = self.label_index["entailment"]
+            scores = [
+                self._compute_hallucination_score(
+                    contradiction=float(p[c_i]),
+                    neutral=float(p[n_i]),
+                    entailment=float(p[e_i]),
+                )
+                for p in claim_probs
+            ]
             best_idx = int(np.argmin(scores))
             best_score = scores[best_idx]
             best_probs = claim_probs[best_idx]
@@ -71,9 +85,9 @@ class NLIVerifier(BaseVerifier):
                 hallucination_score=best_score,
                 details={
                     "verifier": "nli",
-                    "contradiction": float(best_probs[0]),
-                    "neutral": float(best_probs[1]),
-                    "entailment": float(best_probs[2]),
+                    "contradiction": float(best_probs[c_i]),
+                    "neutral": float(best_probs[n_i]),
+                    "entailment": float(best_probs[e_i]),
                     "matched_chunk": context_chunks[best_idx],
                 },
             ))
