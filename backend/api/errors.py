@@ -12,6 +12,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from backend.auth.service import AuthError
+
 logger = logging.getLogger(__name__)
 
 PROBLEM_MEDIA_TYPE = "application/problem+json"
@@ -21,6 +23,19 @@ _HTTP_CODES = {
     403: "forbidden",
     404: "not_found",
     405: "method_not_allowed",
+}
+
+_AUTH_TITLES = {
+    "invalid_credentials": "Invalid credentials",
+    "too_many_attempts": "Too many attempts",
+    "email_taken": "Email already registered",
+    "weak_password": "Weak password",
+    "invalid_email": "Invalid email",
+    "invalid_display_name": "Invalid display name",
+    "registration_disabled": "Registration disabled",
+    "not_a_member": "Not a member of this workspace",
+    "api_key_tenant_fixed": "API keys cannot switch workspace",
+    "not_found": "Not found",
 }
 
 
@@ -75,6 +90,11 @@ def install_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(ApiError)
     async def _api_error(request: Request, exc: ApiError) -> JSONResponse:
         return problem_response(exc.status, exc.code, exc.title, exc.detail, exc.headers)
+
+    @app.exception_handler(AuthError)
+    async def _auth_error(request: Request, exc: AuthError) -> JSONResponse:
+        title = _AUTH_TITLES.get(exc.code, "Authentication error")
+        return problem_response(exc.status, exc.code, title)
 
     @app.exception_handler(RequestValidationError)
     async def _validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
