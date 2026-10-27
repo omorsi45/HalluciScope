@@ -26,6 +26,7 @@ __all__ = [
     "api_settings",
     "client",
     "client2",
+    "client3",
     "create_database",
     "db",
     "drop_database",
@@ -155,6 +156,15 @@ async def client(api_app):
 @pytest_asyncio.fixture(loop_scope="session")
 async def client2(api_app):
     """Second client with its own cookie jar, for two-user tests."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api_app), base_url="http://test"
+    ) as http_client:
+        yield http_client
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def client3(api_app):
+    """Third client with its own cookie jar, for three-user tests."""
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=api_app), base_url="http://test"
     ) as http_client:

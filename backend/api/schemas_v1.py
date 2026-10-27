@@ -1,10 +1,10 @@
 """Request and response models for /api/v1."""
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints
 
 
 class RegisterIn(BaseModel):
@@ -60,3 +60,41 @@ class ApiKeyOut(BaseModel):
 
 class ApiKeyCreatedOut(ApiKeyOut):
     token: str
+
+
+class CollectionIn(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    description: Annotated[str, StringConstraints(max_length=1000)] = ""
+
+
+class CollectionPatch(BaseModel):
+    name: (
+        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+        | None
+    ) = None
+    description: Annotated[str, StringConstraints(max_length=1000)] | None = None
+
+
+class CollectionOut(BaseModel):
+    id: UUID
+    name: str
+    description: str
+    kind: str
+    created_at: datetime
+    permission: str
+
+
+class GrantIn(BaseModel):
+    user_id: UUID
+    permission: Literal["read", "write", "admin"]
+
+
+class GrantsIn(BaseModel):
+    grants: list[GrantIn] = Field(max_length=500)
+
+
+class GrantOut(BaseModel):
+    user_id: UUID
+    email: str
+    display_name: str
+    permission: str

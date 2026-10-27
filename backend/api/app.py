@@ -11,6 +11,7 @@ from backend.api.middleware import (
 from backend.api.routes.analysis import router as analysis_router
 from backend.api.routes.api_keys import router as api_keys_router
 from backend.api.routes.auth import router as auth_router
+from backend.api.routes.collections import router as collections_router
 from backend.api.routes.feedback import router as feedback_router
 from backend.config import Settings
 
@@ -52,6 +53,7 @@ def create_app(settings: Settings | None = None, lifespan=None) -> FastAPI:
     v1 = APIRouter()
     v1.include_router(auth_router, prefix="/auth")
     v1.include_router(api_keys_router, prefix="/api-keys")
+    v1.include_router(collections_router, prefix="/collections")
     app.include_router(v1, prefix="/api/v1")
 
     # Legacy routes, replaced in Plan C.
