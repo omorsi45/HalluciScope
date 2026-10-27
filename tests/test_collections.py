@@ -4,7 +4,7 @@ import pytest
 
 from backend.api.errors import ApiError
 from backend.auth.service import Principal
-from backend.authz.policy import readable_collection_ids
+from backend.authz.policy import readable_collection_ids, require_collection
 from backend.db.repos import tenants
 from tests.helpers.auth import csrf, signup
 
@@ -285,3 +285,25 @@ async def test_by_id_routes_do_not_expose_non_normal_collections(client, db, kin
     async with db.tenant_tx(tenant_id) as conn:
         cur = await conn.execute("select name from collections where id = %s", (collection_id,))
         assert (await cur.fetchone())["name"] == "Scratch"
+
+
+async def test_require_collection_kinds_keyword_opts_into_other_kinds(client, db):
+    alice = await signup(client)
+    tenant_id = UUID(alice["tenant"]["id"])
+    principal = Principal(
+        UUID(alice["user"]["id"]), "alice@example.com", "Alice", tenant_id, "owner", "session"
+    )
+    async with db.tenant_tx(tenant_id) as conn:
+        cur = await conn.execute(
+            "insert into collections (tenant_id, name, kind) values (%s, 'Scratch', 'quick') "
+            "returning id",
+            (tenant_id,),
+        )
+        collection_id = (await cur.fetchone())["id"]
+
+        row = await require_collection(conn, principal, collection_id, "read", kinds=("quick",))
+        with pytest.raises(ApiError) as info:
+            await require_collection(conn, principal, collection_id, "read")
+
+    assert (row["kind"], row["permission"]) == ("quick", "admin")
+    assert (info.value.status, info.value.code) == (404, "collection_not_found")
