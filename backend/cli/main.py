@@ -196,3 +196,7 @@ def evaluate(
     else:
         from evaluation.benchmarks import run_benchmark
         asyncio.run(run_benchmark(dataset=dataset, output_dir=str(output)))
+
+
+if __name__ == "__main__":
+    app()
