@@ -1,6 +1,8 @@
 from pathlib import Path
 
-from pypdf import PdfReader
+from backend.ingest.errors import IngestError
+from backend.ingest.parsers.pdf import parse_pdf
+from backend.ingest.parsers.text import parse_text
 
 
 def parse_document(
@@ -15,12 +17,15 @@ def parse_document(
         raise ValueError("Either text or file_path must be provided.")
 
     file_path = Path(file_path)
-    suffix = file_path.suffix.lower()
+    data = file_path.read_bytes()
 
-    if suffix == ".pdf":
-        reader = PdfReader(str(file_path))
-        pages = [page.extract_text() or "" for page in reader.pages]
-        return "\n".join(pages).strip()
+    if file_path.suffix.lower() == ".pdf":
+        try:
+            return parse_pdf(data).text
+        except IngestError as exc:
+            if exc.code == "no_text":  # an image-only PDF has always read as empty text here
+                return ""
+            raise
 
     # Default: read as plain text
-    return file_path.read_text(encoding="utf-8")
+    return parse_text(data).text
