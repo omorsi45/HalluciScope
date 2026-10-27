@@ -620,3 +620,35 @@ async def test_login_with_oversized_email_skips_the_throttle_table(auth, db):
     )
 
     assert await _fetch(db, "select 1 from auth_throttle where left(key, 6) = 'email:'") == []
+
+
+async def test_full_ip_key_creates_no_email_throttle_row(auth, db):
+    for i in range(20):
+        await _expect_code(
+            auth.login(f"user{i}@example.com", PASSWORD, ip="9.9.9.9"), "invalid_credentials", 401
+        )
+
+    await _expect_code(
+        auth.login("fresh@example.com", PASSWORD, ip="9.9.9.9"), "too_many_attempts", 429
+    )
+
+    rows = await _fetch(db, "select 1 from auth_throttle where key = 'email:fresh@example.com'")
+    assert rows == []
+
+
+async def test_full_email_key_gives_the_ip_reservation_back(auth, db):
+    await _register(auth)
+    for _ in range(5):
+        await _expect_code(
+            auth.login("alice@example.com", "wrong password!!", ip="1.1.1.1"),
+            "invalid_credentials",
+            401,
+        )
+    before = await _fetch(db, "select failures from auth_throttle where key = 'ip:1.1.1.1'")
+
+    await _expect_code(
+        auth.login("alice@example.com", PASSWORD, ip="1.1.1.1"), "too_many_attempts", 429
+    )
+
+    after = await _fetch(db, "select failures from auth_throttle where key = 'ip:1.1.1.1'")
+    assert before == after == [{"failures": 5}]

@@ -183,11 +183,15 @@ class AuthService:
     async def _reserve_attempt(
         self, conn: Any, email_key: str, ip_key: str, window: datetime
     ) -> bool:
-        """Count this attempt against both keys, or against neither when either is full."""
-        if not await throttle.reserve(conn, email_key, window, _EMAIL_FAILURE_LIMIT):
-            return False
+        """Count this attempt against both keys, or against neither when either is full.
+
+        The ip key goes first: attacker-chosen emails then cannot create email rows once an
+        ip is at its limit.
+        """
         if not await throttle.reserve(conn, ip_key, window, _IP_FAILURE_LIMIT):
-            await throttle.release(conn, email_key, window)
+            return False
+        if not await throttle.reserve(conn, email_key, window, _EMAIL_FAILURE_LIMIT):
+            await throttle.release(conn, ip_key, window)
             return False
         return True
 
