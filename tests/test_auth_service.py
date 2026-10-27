@@ -652,3 +652,24 @@ async def test_full_email_key_gives_the_ip_reservation_back(auth, db):
 
     after = await _fetch(db, "select failures from auth_throttle where key = 'ip:1.1.1.1'")
     assert before == after == [{"failures": 5}]
+
+
+async def _last_used(db):
+    return (await _fetch(db, "select last_used_at from api_keys"))[0]["last_used_at"]
+
+
+async def test_api_key_last_used_is_written_at_most_once_a_minute(auth, db):
+    await _register(auth)
+    principal = (await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")).principal
+    _info, token = await auth.create_api_key(principal, "ci")
+
+    await auth.resolve_api_key(token)
+    first = await _last_used(db)
+    assert first is not None
+    await auth.resolve_api_key(token)
+    assert await _last_used(db) == first
+
+    await _fetch(db, "update api_keys set last_used_at = now() - interval '61 seconds' returning 1")
+    stale = await _last_used(db)
+    await auth.resolve_api_key(token)
+    assert await _last_used(db) > stale

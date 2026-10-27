@@ -65,4 +65,9 @@ async def revoke(conn: AsyncConnection, key_id: UUID, tenant_id: UUID) -> bool:
 
 
 async def touch(conn: AsyncConnection, key_id: UUID) -> None:
-    await conn.execute("update api_keys set last_used_at = now() where id = %s", (key_id,))
+    """Record use, at most once a minute, so busy keys do not rewrite their row per request."""
+    await conn.execute(
+        "update api_keys set last_used_at = now() where id = %s "
+        "and (last_used_at is null or last_used_at < now() - interval '60 seconds')",
+        (key_id,),
+    )
