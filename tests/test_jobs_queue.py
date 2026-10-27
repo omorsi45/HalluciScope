@@ -427,6 +427,23 @@ async def test_requeue_stale_leaves_fresh_leases_alone(db):
     assert (await _row(db, queued))["status"] == "queued"
 
 
+async def test_requeue_stale_detailed_returns_the_dead_lettered_jobs(db):
+    requeued_id = await _enqueue(db, max_attempts=3)
+    dead_id = await _enqueue(db, max_attempts=1)
+    for job_id in (requeued_id, dead_id):
+        await _claim(db, worker=f"w-{job_id}")
+        await _age_heartbeat(db, job_id, 121)
+
+    async with db.system_tx() as conn:
+        count, dead = await queue.requeue_stale_detailed(conn)
+
+    assert count == 2
+    assert [job.id for job in dead] == [dead_id]
+    assert (dead[0].kind, dead[0].attempts, dead[0].max_attempts) == ("ingest", 1, 1)
+    assert (await _row(db, requeued_id))["status"] == "queued"
+    assert (await _row(db, dead_id))["status"] == "dead"
+
+
 async def test_count_queued(db):
     async with db.system_tx() as conn:
         assert await queue.count_queued(conn) == 0

@@ -125,7 +125,7 @@ async def _run_worker(settings: Settings) -> None:
     import signal
 
     from backend.db.pool import Database
-    from backend.jobs.registry import build_handlers
+    from backend.jobs.registry import build_failure_handlers, build_handlers
     from backend.jobs.worker import Worker, default_worker_id
     from backend.obs.logging import configure_logging
     from backend.obs.metrics_server import start_metrics_server
@@ -150,7 +150,11 @@ async def _run_worker(settings: Settings) -> None:
         slots = [
             asyncio.create_task(
                 Worker(
-                    db, build_handlers(services), services=services, worker_id=f"{base_id}:{slot}"
+                    db,
+                    build_handlers(services),
+                    failure_handlers=build_failure_handlers(services),
+                    services=services,
+                    worker_id=f"{base_id}:{slot}",
                 ).run(stop)
             )
             for slot in range(settings.worker_concurrency)

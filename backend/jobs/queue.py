@@ -188,8 +188,13 @@ async def release(conn: AsyncConnection, job_id: int, worker_id: str) -> bool:
     return await cur.fetchone() is not None
 
 
-async def requeue_stale(conn: AsyncConnection, stale_after_s: float = 120.0) -> int:
-    """Recover jobs whose worker stopped heartbeating; the lost attempt still counts."""
+async def requeue_stale_detailed(
+    conn: AsyncConnection, stale_after_s: float = 120.0
+) -> tuple[int, list[Job]]:
+    """Recover jobs whose worker stopped heartbeating; the lost attempt still counts.
+
+    Returns the number of jobs touched and the ones that ran out of attempts and went dead.
+    """
     cur = await conn.execute(
         "update jobs set "
         "status = case when attempts < max_attempts then 'queued' else 'dead' end, "
@@ -198,10 +203,17 @@ async def requeue_stale(conn: AsyncConnection, stale_after_s: float = 120.0) -> 
         "else 'lease_expired' end, "
         "locked_by = null, locked_at = null, heartbeat_at = null, updated_at = now() "
         "where status = 'running' and heartbeat_at < now() - make_interval(secs => %s) "
-        "returning id",
+        "returning *",
         (stale_after_s,),
     )
-    return len(await cur.fetchall())
+    rows = await cur.fetchall()
+    return len(rows), [_job_from_row(row) for row in rows if row["status"] == "dead"]
+
+
+async def requeue_stale(conn: AsyncConnection, stale_after_s: float = 120.0) -> int:
+    """Recover jobs whose worker stopped heartbeating; returns how many were touched."""
+    count, _dead = await requeue_stale_detailed(conn, stale_after_s)
+    return count
 
 
 async def count_queued(conn: AsyncConnection) -> int:

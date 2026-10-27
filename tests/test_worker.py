@@ -2,6 +2,8 @@ import asyncio
 import io
 import json
 import logging
+import os
+import signal
 from contextlib import contextmanager
 
 import pytest
@@ -10,7 +12,7 @@ from typer.testing import CliRunner
 from backend.cli.main import _run_worker, app
 from backend.config import Settings
 from backend.jobs import queue
-from backend.jobs.registry import build_handlers
+from backend.jobs.registry import build_failure_handlers, build_handlers
 from backend.jobs.worker import (
     JobContext,
     PermanentJobError,
@@ -77,6 +79,7 @@ async def _noop(ctx: JobContext):
 
 def test_build_handlers_is_empty_in_plan_a():
     assert build_handlers(None) == {}
+    assert build_failure_handlers(None) == {}
 
 
 def test_worker_help_exits_zero():
@@ -716,6 +719,167 @@ async def test_request_id_does_not_leak_to_the_next_job(db):
     assert [entry.get("request_id") for entry in finished] == ["req-1", None]
 
 
+async def _make_due(db, job_id):
+    """Skip the retry backoff so the next run_once can claim the job."""
+    async with db.system_tx() as conn:
+        await conn.execute("update jobs set run_after = now() where id = %s", (job_id,))
+
+
+@pytest.mark.pg
+async def test_failure_hook_runs_once_when_retries_are_exhausted(db):
+    calls = []
+
+    async def handler(ctx: JobContext):
+        raise RetryableJobError("upstream_down")
+
+    async def hook(ctx: JobContext, error_code: str):
+        calls.append((ctx.job.id, ctx.job.kind, ctx.job.attempts, error_code))
+
+    job_id = await _enqueue(db, max_attempts=3)
+    worker = Worker(db, {"ingest": handler}, failure_handlers={"ingest": hook})
+
+    for _ in range(3):
+        assert await _run_once(worker) is True
+        await _make_due(db, job_id)
+
+    assert (await _job(db, job_id))["status"] == "dead"
+    assert calls == [(job_id, "ingest", 3, "upstream_down")]
+
+
+@pytest.mark.pg
+async def test_failure_hook_runs_once_for_a_permanent_failure(db):
+    calls = []
+
+    async def handler(ctx: JobContext):
+        raise PermanentJobError("bad_input")
+
+    async def hook(ctx: JobContext, error_code: str):
+        calls.append((ctx.job.id, error_code))
+
+    job_id = await _enqueue(db)
+    await _run_once(Worker(db, {"ingest": handler}, failure_handlers={"ingest": hook}))
+
+    assert (await _job(db, job_id))["status"] == "failed"
+    assert calls == [(job_id, "bad_input")]
+
+
+@pytest.mark.pg
+async def test_failure_hook_is_not_called_for_success_or_a_pending_retry(db):
+    calls = []
+
+    async def hook(ctx: JobContext, error_code: str):
+        calls.append(error_code)
+
+    async def flaky(ctx: JobContext):
+        raise RetryableJobError("upstream_down")
+
+    ok_id = await _enqueue(db, kind="ok")
+    retry_id = await _enqueue(db, kind="flaky", max_attempts=3)
+    worker = Worker(
+        db,
+        {"ok": _noop, "flaky": flaky},
+        failure_handlers={"ok": hook, "flaky": hook},
+    )
+    await _run_once(worker)
+    await _run_once(worker)
+
+    assert (await _job(db, ok_id))["status"] == "succeeded"
+    assert (await _job(db, retry_id))["status"] == "queued"
+    assert calls == []
+
+
+@pytest.mark.pg
+async def test_failure_hook_only_runs_for_its_own_kind(db):
+    calls = []
+
+    async def handler(ctx: JobContext):
+        raise PermanentJobError("bad_input")
+
+    async def other_hook(ctx: JobContext, error_code: str):
+        calls.append(ctx.job.kind)
+
+    await _enqueue(db)
+    await _run_once(Worker(db, {"ingest": handler}, failure_handlers={"other": other_hook}))
+
+    assert calls == []
+
+
+@pytest.mark.pg
+async def test_failure_hook_runs_for_a_dead_lettered_stale_job(db):
+    calls = []
+    seen = asyncio.Event()
+
+    async def hook(ctx: JobContext, error_code: str):
+        calls.append((ctx.job.id, ctx.job.kind, error_code))
+        seen.set()
+
+    job_id = await _enqueue(db, max_attempts=1)
+    async with db.system_tx() as conn:
+        assert await queue.claim(conn, "dead-worker", ["ingest"]) is not None
+        await conn.execute(
+            "update jobs set heartbeat_at = now() - interval '1 hour' where id = %s", (job_id,)
+        )
+
+    worker = Worker(
+        db,
+        {"ingest": _noop},
+        poll_interval_s=0.05,
+        stale_after_s=60.0,
+        failure_handlers={"ingest": hook},
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(worker.run(stop))
+    try:
+        await asyncio.wait_for(seen.wait(), LIMIT_S)
+        stop.set()
+        await asyncio.wait_for(task, LIMIT_S)
+    finally:
+        task.cancel()
+
+    assert (await _job(db, job_id))["status"] == "dead"
+    assert calls == [(job_id, "ingest", "lease_expired")]
+
+
+@pytest.mark.pg
+async def test_failure_hook_error_is_logged_and_does_not_stop_the_loop(db):
+    ran_second = asyncio.Event()
+
+    async def handler(ctx: JobContext):
+        if ctx.job.payload.get("n") == 1:
+            raise PermanentJobError("bad_input")
+        ran_second.set()
+
+    async def hook(ctx: JobContext, error_code: str):
+        raise RuntimeError("SECRET-DOC")
+
+    first = await _enqueue(db, payload={"n": 1})
+    second = await _enqueue(db, payload={"n": 2})
+    worker = Worker(
+        db, {"ingest": handler}, poll_interval_s=0.05, failure_handlers={"ingest": hook}
+    )
+    stop = asyncio.Event()
+    with _json_logs() as stream:
+        task = asyncio.create_task(worker.run(stop))
+        try:
+            await asyncio.wait_for(ran_second.wait(), LIMIT_S)
+            await _until(lambda: _is_status(db, second, "succeeded"))
+            stop.set()
+            await asyncio.wait_for(task, LIMIT_S)
+        finally:
+            task.cancel()
+
+    assert (await _job(db, first))["status"] == "failed"
+    entries = [json.loads(line) for line in stream.getvalue().splitlines()]
+    hook_errors = [e for e in entries if e["msg"] == "job failure hook error"]
+    assert [e["kind"] for e in hook_errors] == ["ingest"]
+    assert "SECRET-DOC" not in stream.getvalue()
+    assert not any(e["msg"] == "worker loop error" for e in entries)
+
+
+async def _is_status(db, job_id, status):
+    return (await _job(db, job_id))["status"] == status
+
+
 def test_worker_command_rejects_concurrency_below_one(monkeypatch):
     started = []
 
@@ -737,7 +901,9 @@ class _Harness:
 
     def __init__(self, monkeypatch, *, slot_zero_raises=False, metrics_raises=False):
         self.events = []
+        self.failure_handlers = []
         events = self.events
+        passed_failure_handlers = self.failure_handlers
 
         class FakeDb:
             def __init__(self, url, **kwargs):
@@ -763,8 +929,9 @@ class _Harness:
             return FakeServer()
 
         class FakeWorker:
-            def __init__(self, db, handlers, *, services=None, worker_id):
+            def __init__(self, db, handlers, *, failure_handlers=None, services=None, worker_id):
                 self.worker_id = worker_id
+                passed_failure_handlers.append(failure_handlers)
 
             async def run(self, stop):
                 if slot_zero_raises and self.worker_id.endswith(":0"):
@@ -790,6 +957,23 @@ async def test_run_worker_waits_for_other_slots_when_one_slot_fails(monkeypatch)
     assert events.index("slot1.stopped") < events.index("metrics.shutdown")
     assert events.index("metrics.close") < events.index("db.close")
     assert events[-1] == "db.close"
+
+
+async def test_run_worker_passes_the_failure_handlers_to_every_worker(monkeypatch):
+    harness = _Harness(monkeypatch)
+    sentinel = {"ingest": _noop}
+    monkeypatch.setattr("backend.jobs.registry.build_failure_handlers", lambda services: sentinel)
+
+    task = asyncio.create_task(_run_worker(Settings(worker_concurrency=2)))
+    await _until(lambda: _has(harness.failure_handlers, 2))
+    os.kill(os.getpid(), signal.SIGINT)
+    await asyncio.wait_for(task, LIMIT_S)
+
+    assert harness.failure_handlers == [sentinel, sentinel]
+
+
+async def _has(items, count):
+    return len(items) >= count
 
 
 async def test_run_worker_closes_the_database_when_the_metrics_server_fails(monkeypatch):

@@ -61,6 +61,8 @@ class JobContext:
 
 
 Handler = Callable[[JobContext], Awaitable[None]]
+# Called once with the final error code when a job fails permanently or runs out of attempts.
+FailureHandler = Callable[[JobContext, str], Awaitable[None]]
 
 
 def default_worker_id() -> str:
@@ -73,6 +75,7 @@ class Worker:
         db: Database,
         handlers: Mapping[str, Handler],
         *,
+        failure_handlers: Mapping[str, FailureHandler] | None = None,
         services: Any = None,
         worker_id: str | None = None,
         poll_interval_s: float = 1.0,
@@ -84,6 +87,7 @@ class Worker:
     ) -> None:
         self._db = db
         self._handlers = dict(handlers)
+        self._failure_handlers = dict(failure_handlers or {})
         self._kinds = sorted(self._handlers)
         self._services = services
         self.worker_id = worker_id or default_worker_id()
@@ -210,6 +214,7 @@ class Worker:
         return {"worker_id": self.worker_id, "kind": job.kind, "attempt": job.attempts}
 
     async def _finish(self, job: Job, result: tuple[str, bool] | None) -> None:
+        status = None
         async with self._db.system_tx() as conn:
             if result is None:
                 held = await queue.complete(conn, job.id, self.worker_id)
@@ -227,6 +232,19 @@ class Worker:
         if result is not None:
             extra["error_code"] = result[0]
         logger.info("job finished", extra=extra)
+        if result is not None and status in ("failed", "dead"):
+            await self._run_failure_hook(job, result[0])
+
+    async def _run_failure_hook(self, job: Job, error_code: str) -> None:
+        """Let the job's kind settle its domain rows; a hook error is logged, never raised."""
+        hook = self._failure_handlers.get(job.kind)
+        if hook is None:
+            return
+        ctx = JobContext(job=job, db=self._db, worker_id=self.worker_id, services=self._services)
+        try:
+            await hook(ctx, error_code)
+        except Exception:
+            logger.exception("job failure hook error", extra=self._extra(job))
 
     async def _release(self, job: Job) -> None:
         async with self._db.system_tx() as conn:
@@ -273,9 +291,13 @@ class Worker:
         while True:
             try:
                 async with self._db.system_tx() as conn:
-                    requeued = await queue.requeue_stale(conn, self._stale_after_s)
+                    requeued, dead = await queue.requeue_stale_detailed(
+                        conn, self._stale_after_s
+                    )
                 if requeued:
                     logger.info("stale jobs requeued", extra={"worker_id": self.worker_id})
+                for job in dead:
+                    await self._run_failure_hook(job, "lease_expired")
             except Exception:
                 logger.exception("requeue error", extra={"worker_id": self.worker_id})
             await asyncio.sleep(REQUEUE_INTERVAL_S)
