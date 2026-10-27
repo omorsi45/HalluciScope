@@ -69,7 +69,7 @@ async def test_every_tenant_table_has_forced_rls(db):
         cur = await conn.execute(
             "select c.relname, c.relrowsecurity, c.relforcerowsecurity "
             "from pg_class c join pg_namespace n on n.oid = c.relnamespace "
-            "where c.relkind = 'r' and n.nspname = 'public'"
+            "where c.relkind in ('r', 'p') and n.nspname = 'public'"
         )
         rows = await cur.fetchall()
     tenant_tables = {row["relname"]: row for row in rows if row["relname"] not in GLOBAL_TABLES}
@@ -80,6 +80,34 @@ async def test_every_tenant_table_has_forced_rls(db):
         if not (row["relrowsecurity"] and row["relforcerowsecurity"])
     )
     assert unprotected == []
+
+
+TENANT_POLICY = (
+    "(tenant_id = (NULLIF(current_setting('app.tenant_id'::text, true), ''::text))::uuid)"
+)
+
+
+async def test_every_tenant_table_has_the_tenant_isolation_policy(db):
+    async with db.system_tx() as conn:
+        cur = await conn.execute(
+            "select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+            "where c.relkind in ('r', 'p') and n.nspname = 'public'"
+        )
+        tenant_tables = {row["relname"] for row in await cur.fetchall()} - GLOBAL_TABLES
+        cur = await conn.execute(
+            "select tablename, qual, with_check from pg_policies "
+            "where schemaname = 'public' and policyname = 'tenant_isolation'"
+        )
+        policies = {row["tablename"]: row for row in await cur.fetchall()}
+
+    assert {"collections", "collection_grants"} <= tenant_tables
+    assert sorted(tenant_tables - policies.keys()) == []
+    wrong = sorted(
+        name
+        for name in tenant_tables
+        if (policies[name]["qual"], policies[name]["with_check"]) != (TENANT_POLICY, TENANT_POLICY)
+    )
+    assert wrong == []
 
 
 async def _create_member(db, tenant_id: uuid.UUID, email: str) -> uuid.UUID:
