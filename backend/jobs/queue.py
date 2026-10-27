@@ -21,6 +21,11 @@ MAX_LIST_ITEMS = 1000
 _ERROR_CODE = re.compile(r"[a-z0-9_]{1,64}")
 
 
+def is_valid_error_code(code: str) -> bool:
+    """True if `code` is storable as a job error code: 1 to 64 of [a-z0-9_]."""
+    return isinstance(code, str) and _ERROR_CODE.fullmatch(code) is not None
+
+
 @dataclass(frozen=True)
 class Job:
     id: int
@@ -155,7 +160,7 @@ async def fail(
     permanent: bool = False,
 ) -> str | None:
     """Record a failure and return the new status, or None if the caller does not hold the lease."""
-    if not _ERROR_CODE.fullmatch(error_code):
+    if not is_valid_error_code(error_code):
         raise ValueError("error_code must match [a-z0-9_]{1,64}")
     cur = await conn.execute(
         "update jobs set "

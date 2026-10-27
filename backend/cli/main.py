@@ -133,35 +133,54 @@ async def _run_worker(settings: Settings) -> None:
     configure_logging(settings.log_level)
     # Each slot can hold a handler, a job heartbeat and its housekeeping at once.
     db = Database(settings.database_url, max_size=max(10, 4 * settings.worker_concurrency))
-    await db.open()
-    metrics_server = start_metrics_server(
-        "127.0.0.1", settings.worker_metrics_port, settings.metrics_token
-    )
+    metrics_server = None
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    signals = (signal.SIGTERM, signal.SIGINT)
-    for sig in signals:
-        loop.add_signal_handler(sig, stop.set)
+    installed: list[signal.Signals] = []
     try:
+        await db.open()
+        metrics_server = start_metrics_server(
+            "127.0.0.1", settings.worker_metrics_port, settings.metrics_token
+        )
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, stop.set)
+            installed.append(sig)
         services = None  # Plan B introduces the services container
         base_id = default_worker_id()
-        workers = [
-            Worker(db, build_handlers(services), services=services, worker_id=f"{base_id}:{slot}")
+        slots = [
+            asyncio.create_task(
+                Worker(
+                    db, build_handlers(services), services=services, worker_id=f"{base_id}:{slot}"
+                ).run(stop)
+            )
             for slot in range(settings.worker_concurrency)
         ]
-        await asyncio.gather(*(worker.run(stop) for worker in workers))
+        try:
+            await asyncio.wait(slots, return_when=asyncio.FIRST_EXCEPTION)
+        finally:
+            # A failed slot stops the others; wait for them so no job is cut off mid-flight
+            # by the pool closing underneath it.
+            stop.set()
+            await asyncio.gather(*slots, return_exceptions=True)
+        for slot_task in slots:
+            slot_task.result()
     finally:
-        for sig in signals:
+        for sig in installed:
             loop.remove_signal_handler(sig)
-        metrics_server.shutdown()
-        metrics_server.server_close()
+        if metrics_server is not None:
+            metrics_server.shutdown()
+            metrics_server.server_close()
         await db.close()
 
 
 @app.command()
 def worker():
     """Run the background job worker until SIGTERM or SIGINT."""
-    asyncio.run(_run_worker(Settings()))
+    settings = Settings()
+    if settings.worker_concurrency < 1:
+        typer.echo("worker_concurrency must be at least 1", err=True)
+        raise typer.Exit(2)
+    asyncio.run(_run_worker(settings))
 
 
 @app.command()

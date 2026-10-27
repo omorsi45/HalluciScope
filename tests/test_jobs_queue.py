@@ -439,3 +439,15 @@ async def test_count_queued(db):
         assert await queue.count_queued(conn) == 2
         await queue.complete(conn, claimed.id, WORKER)
         assert await queue.count_queued(conn) == 2
+
+
+@pytest.mark.parametrize("code", ["a", "internal_error", "job_timeout", "x1_" * 20, "0" * 64])
+def test_is_valid_error_code_accepts_lowercase_codes(code):
+    assert queue.is_valid_error_code(code) is True
+
+
+@pytest.mark.parametrize(
+    "code", ["", "Bad-Input", "has space", "UPPER", "x" * 65, "line\nbreak", None]
+)
+def test_is_valid_error_code_rejects_everything_else(code):
+    assert queue.is_valid_error_code(code) is False

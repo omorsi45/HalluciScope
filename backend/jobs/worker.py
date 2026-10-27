@@ -26,6 +26,15 @@ logger = logging.getLogger(__name__)
 
 REQUEUE_INTERVAL_S = 30.0
 
+_DONE = "done"
+_CANCELLED_BY_SHUTDOWN = "cancelled_by_shutdown"
+_ABANDONED = "abandoned"
+
+
+def _normalize_code(code: str) -> str:
+    """Keep a valid handler error code; anything queue.fail would reject becomes internal_error."""
+    return code if queue.is_valid_error_code(code) else "internal_error"
+
 
 class PermanentJobError(Exception):
     """The job can never succeed; mark it failed without retrying."""
@@ -126,59 +135,79 @@ class Worker:
 
     async def _process(self, job: Job, stop: asyncio.Event | None) -> None:
         started = time.monotonic()
-        with bind(job_id=str(job.id)):
+        with bind(job_id=str(job.id), request_id=job.request_id):
             handler_task = asyncio.create_task(self._invoke(job))
             heartbeat_task = asyncio.create_task(self._heartbeat_job(job))
-            shutting_down = False
+            state = _DONE
             try:
-                shutting_down = await self._await_handler(handler_task, stop)
+                state = await self._await_handler(handler_task, stop)
             finally:
                 heartbeat_task.cancel()
-                if not handler_task.done():
-                    handler_task.cancel()
-                await asyncio.gather(heartbeat_task, handler_task, return_exceptions=True)
-            if shutting_down or handler_task.cancelled():
+                waiting: list[asyncio.Future] = [heartbeat_task]
+                if state != _ABANDONED:
+                    if not handler_task.done():
+                        handler_task.cancel()
+                    waiting.append(handler_task)
+                await asyncio.gather(*waiting, return_exceptions=True)
+            if state == _ABANDONED:
+                # Releasing would let another worker run the job beside the stuck handler;
+                # the lease goes stale and requeue_stale recovers it.
+                logger.error("job handler did not stop", extra=self._extra(job))
+                return
+            if state == _CANCELLED_BY_SHUTDOWN:
                 await self._release(job)
                 return
             JOB_DURATION.labels(kind=job.kind).observe(time.monotonic() - started)
-            await self._finish(job, handler_task.result())
+            if handler_task.cancelled():
+                # Cancelled from inside the handler while we were not shutting down: retry it
+                # with backoff instead of releasing, which would hot-loop on the same job.
+                await self._finish(job, ("internal_error", False))
+            else:
+                await self._finish(job, handler_task.result())
 
-    async def _await_handler(self, handler_task: asyncio.Task, stop: asyncio.Event | None) -> bool:
-        """Wait for the handler; True if shutdown cut it short and it was cancelled."""
+    async def _await_handler(self, handler_task: asyncio.Task, stop: asyncio.Event | None) -> str:
+        """Wait for the handler; return _DONE, _CANCELLED_BY_SHUTDOWN or _ABANDONED."""
         if stop is None:
             await asyncio.wait({handler_task})
-            return False
+            return _DONE
         stop_task = asyncio.create_task(stop.wait())
         try:
             await asyncio.wait({handler_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
         finally:
             stop_task.cancel()
         if handler_task.done():
-            return False
+            return _DONE
         await asyncio.wait({handler_task}, timeout=self._shutdown_grace_s)
         if handler_task.done():
-            return False
+            return _DONE
         handler_task.cancel()
-        await asyncio.wait({handler_task})
-        return True
+        await asyncio.wait({handler_task}, timeout=self._shutdown_grace_s)
+        return _CANCELLED_BY_SHUTDOWN if handler_task.done() else _ABANDONED
 
     async def _invoke(self, job: Job) -> tuple[str, bool] | None:
         """Run the handler; return None on success or (error_code, permanent)."""
         ctx = JobContext(job=job, db=self._db, worker_id=self.worker_id, services=self._services)
-        timeout_s = self._timeouts_s.get(job.kind, self._default_timeout_s)
+        timeout = asyncio.timeout(self._timeouts_s.get(job.kind, self._default_timeout_s))
         try:
-            async with asyncio.timeout(timeout_s):
+            async with timeout:
                 await self._handlers[job.kind](ctx)
         except PermanentJobError as exc:
-            return exc.code, True
+            return _normalize_code(exc.code), True
         except RetryableJobError as exc:
-            return exc.code, False
+            return _normalize_code(exc.code), False
         except TimeoutError:
-            return "job_timeout", False
+            if timeout.expired():
+                return "job_timeout", False
+            # A TimeoutError the handler raised itself (for example from a client call).
+            logger.exception("job handler error", extra=self._extra(job))
+            return "internal_error", False
         except Exception:
-            logger.exception("job handler error")
+            logger.exception("job handler error", extra=self._extra(job))
             return "internal_error", False
         return None
+
+    def _extra(self, job: Job) -> dict[str, Any]:
+        return {"worker_id": self.worker_id, "kind": job.kind, "attempt": job.attempts}
 
     async def _finish(self, job: Job, result: tuple[str, bool] | None) -> None:
         async with self._db.system_tx() as conn:
@@ -190,29 +219,22 @@ class Worker:
                 status = await queue.fail(conn, job.id, self.worker_id, code, permanent=permanent)
                 held = status is not None
                 outcome = {"failed": "failed", "queued": "retry", "dead": "dead"}.get(status or "")
-        extra = {
-            "worker_id": self.worker_id,
-            "kind": job.kind,
-            "attempt": job.attempts,
-        }
         if not held:
-            logger.warning("job lease lost", extra=extra)
+            logger.warning("job lease lost", extra=self._extra(job))
             return
         JOBS.labels(kind=job.kind, outcome=outcome).inc()
-        logger.info("job finished", extra={**extra, "outcome": outcome})
+        extra = {**self._extra(job), "outcome": outcome}
+        if result is not None:
+            extra["error_code"] = result[0]
+        logger.info("job finished", extra=extra)
 
     async def _release(self, job: Job) -> None:
         async with self._db.system_tx() as conn:
-            await queue.release(conn, job.id, self.worker_id)
-        logger.info(
-            "job released",
-            extra={
-                "worker_id": self.worker_id,
-                "kind": job.kind,
-                "attempt": job.attempts,
-                "outcome": "released",
-            },
-        )
+            released = await queue.release(conn, job.id, self.worker_id)
+        if released:
+            logger.info("job released", extra={**self._extra(job), "outcome": "released"})
+        else:
+            logger.warning("job lease lost", extra=self._extra(job))
 
     async def _heartbeat_job(self, job: Job) -> None:
         while True:
@@ -221,10 +243,10 @@ class Worker:
                 async with self._db.system_tx() as conn:
                     held = await queue.heartbeat(conn, job.id, self.worker_id)
             except Exception:
-                logger.exception("job heartbeat error")
+                logger.exception("job heartbeat error", extra=self._extra(job))
                 continue
             if not held:
-                logger.warning("job lease lost", extra={"worker_id": self.worker_id})
+                logger.warning("job lease lost", extra=self._extra(job))
                 return
 
     async def _register(self) -> None:
