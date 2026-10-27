@@ -18,11 +18,11 @@ CSRF_HEADER = "X-CSRF-Token"
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
-def get_db(request: Request) -> Database:
+async def get_db(request: Request) -> Database:
     return request.app.state.db
 
 
-def get_auth(request: Request) -> AuthService:
+async def get_auth(request: Request) -> AuthService:
     return request.app.state.auth
 
 
@@ -55,7 +55,7 @@ async def current_principal(request: Request) -> Principal:
     This must stay ``async def``: a sync dependency runs in a worker thread with a copied
     context, so the ``.set()`` calls below would not reach the request's log context.
     """
-    auth = get_auth(request)
+    auth = await get_auth(request)
     bearer = _bearer_token(request)
     if bearer is not None:
         # A presented API key never falls back to a cookie, and carries no CSRF risk.

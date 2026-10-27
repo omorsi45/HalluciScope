@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 from uuid import UUID, uuid4
 
 import httpx
@@ -7,7 +8,8 @@ from fastapi import Depends
 
 from backend.api.app import create_app
 from backend.api.errors import ApiError
-from backend.auth.deps import current_principal, require_role
+from backend.api.pagination import page_params
+from backend.auth.deps import current_principal, get_auth, get_db, require_role
 from backend.auth.service import AuthService, Principal
 from backend.config import Settings
 from backend.obs.logging import tenant_id_var, user_id_var
@@ -295,3 +297,9 @@ async def test_register_rejects_oversized_password_and_display_name(client):
 
     assert long_password.status_code == 422
     assert long_name.status_code == 422
+
+
+@pytest.mark.parametrize("dependency", [get_db, get_auth, page_params])
+def test_trivial_dependencies_are_coroutines(dependency):
+    # A sync dependency is dispatched to a worker thread on every request.
+    assert inspect.iscoroutinefunction(dependency)
