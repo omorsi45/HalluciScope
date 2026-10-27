@@ -13,6 +13,7 @@ from backend.api.routes.api_keys import router as api_keys_router
 from backend.api.routes.auth import router as auth_router
 from backend.api.routes.collections import router as collections_router
 from backend.api.routes.feedback import router as feedback_router
+from backend.api.routes.health import router as health_router
 from backend.api.routes.members import router as members_router
 from backend.config import Settings
 
@@ -52,6 +53,7 @@ def create_app(settings: Settings | None = None, lifespan=None) -> FastAPI:
 
     # Later tasks include their routers into v1 before it is mounted.
     v1 = APIRouter()
+    v1.include_router(health_router)
     v1.include_router(auth_router, prefix="/auth")
     v1.include_router(api_keys_router, prefix="/api-keys")
     v1.include_router(collections_router, prefix="/collections")

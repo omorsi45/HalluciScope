@@ -103,3 +103,20 @@ async def pending(url: str, directory: Path = MIGRATIONS_DIR) -> list[int]:
     async with await psycopg.AsyncConnection.connect(url, autocommit=True) as conn:
         applied = await _bootstrap(conn)
     return [m.version for m in migrations if m.version not in applied]
+
+
+def _value(row, name: str):
+    """First column of a row from either the tuple or the dict row factory."""
+    return row[name] if isinstance(row, dict) else row[0]
+
+
+async def applied_versions(conn: psycopg.AsyncConnection) -> set[int]:
+    """Versions recorded in schema_migrations; empty if the table does not exist yet.
+
+    Read-only, so it works for the app role, which has SELECT but cannot create tables.
+    """
+    cur = await conn.execute("select to_regclass('schema_migrations') is not null as present")
+    if not _value(await cur.fetchone(), "present"):
+        return set()
+    cur = await conn.execute("select version from schema_migrations")
+    return {_value(row, "version") for row in await cur.fetchall()}

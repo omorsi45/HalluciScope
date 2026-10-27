@@ -75,3 +75,4 @@ async def test_shutdown_closes_every_resource_even_if_one_fails(patched, monkeyp
     assert _FakeRepo.instances[0].closed is True
     assert _FakeDb.instances[0].closed is True
     assert app.state.http_client.is_closed is True
+    assert app.state.http is app.state.http_client

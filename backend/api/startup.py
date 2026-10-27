@@ -83,6 +83,7 @@ def create_configured_app() -> FastAPI:
             app.state.pipeline = pipeline
             app.state.repo = repo
             app.state.http_client = http_client
+            app.state.http = http_client
 
             yield  # ── app runs ─────────────────────────────────────────
         finally:
