@@ -28,9 +28,13 @@ async def member_out(conn: AsyncConnection, tenant_id: UUID, user_id: UUID) -> d
 
 
 async def lock_owner_ids(conn: AsyncConnection, tenant_id: UUID) -> list[UUID]:
-    """Lock the tenant's owner memberships so concurrent removals serialize."""
+    """Lock the tenant's owner memberships so concurrent removals serialize.
+
+    Rows are locked in user_id order, so two removals cannot lock them in opposite orders.
+    """
     cur = await conn.execute(
-        "select user_id from memberships where tenant_id = %s and role = 'owner' for update",
+        "select user_id from memberships where tenant_id = %s and role = 'owner' "
+        "order by user_id for update",
         (tenant_id,),
     )
     return [row["user_id"] for row in await cur.fetchall()]
@@ -40,6 +44,23 @@ async def delete_membership(conn: AsyncConnection, tenant_id: UUID, user_id: UUI
     """Grants of the user in the tenant go with it (on delete cascade)."""
     await conn.execute(
         "delete from memberships where tenant_id = %s and user_id = %s", (tenant_id, user_id)
+    )
+
+
+async def revoke_user_credentials(conn: AsyncConnection, tenant_id: UUID, user_id: UUID) -> None:
+    """Revoke the user's sessions and API keys pinned to the tenant.
+
+    Re-adding the user later must not revive credentials from the earlier membership.
+    """
+    await conn.execute(
+        "update sessions set revoked_at = now() "
+        "where tenant_id = %s and user_id = %s and revoked_at is null",
+        (tenant_id, user_id),
+    )
+    await conn.execute(
+        "update api_keys set revoked_at = now() "
+        "where tenant_id = %s and user_id = %s and revoked_at is null",
+        (tenant_id, user_id),
     )
 
 

@@ -83,3 +83,10 @@ def require_role(*roles: str) -> Callable[[Principal], Awaitable[Principal]]:
         return principal
 
     return dependency
+
+
+async def require_session(principal: Principal = Depends(current_principal)) -> Principal:
+    """Reject API key callers, so a leaked key cannot grant itself durable access."""
+    if principal.auth == "api_key":
+        raise ApiError(403, "session_required", "This action requires signing in with a session")
+    return principal

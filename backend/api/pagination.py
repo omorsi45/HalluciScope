@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from backend.api.errors import ApiError
 
 _BIGINT_MAX = 2**63 - 1
+_BIGINT_MAX_DIGITS = len(str(_BIGINT_MAX))
 
 
 def _bad_cursor() -> ApiError:
@@ -55,7 +56,12 @@ def decode_uuid_cursor(cursor: tuple[datetime, str]) -> tuple[datetime, UUID]:
 def decode_int_cursor(cursor: tuple[datetime, str]) -> tuple[datetime, int]:
     """For lists keyed by a bigint id: a key that is not a bigint is a bad cursor."""
     ts, key = cursor
-    if not (key.isascii() and key.isdecimal()) or int(key) > _BIGINT_MAX:
+    # The length check comes first: int() on a very long digit string raises ValueError.
+    if (
+        len(key) > _BIGINT_MAX_DIGITS
+        or not (key.isascii() and key.isdecimal())
+        or int(key) > _BIGINT_MAX
+    ):
         raise _bad_cursor()
     return ts, int(key)
 

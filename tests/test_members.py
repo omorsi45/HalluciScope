@@ -1,15 +1,19 @@
 from datetime import UTC, datetime
+from uuid import UUID
 
+import httpx
 import pytest
 
 from backend.api.pagination import encode_cursor
-from backend.db.repos import tenants
-from tests.helpers.auth import csrf, signup
+from backend.db.repos import members, tenants, users
+from tests.helpers.auth import PASSWORD, csrf, signup
 
 pytestmark = pytest.mark.pg
 
 BASE = "/api/v1/tenants/current"
 COLLECTIONS = "/api/v1/collections"
+KEYS = "/api/v1/api-keys"
+ME = "/api/v1/auth/me"
 
 
 async def _users(client, client2, client3):
@@ -244,3 +248,146 @@ async def test_member_cannot_read_audit(client, client2, client3, db):
 
     assert response.status_code == 403
     assert response.json()["code"] == "forbidden"
+
+
+async def _mint_key(client, session, name="ci"):
+    response = await client.post(KEYS, json={"name": name}, headers=csrf(session))
+    assert response.status_code == 201, response.text
+    return response.json()["token"]
+
+
+async def _bearer_request(api_app, method, url, token, **kwargs):
+    """Send a request from a client that holds no cookies."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api_app), base_url="http://test"
+    ) as bearer_client:
+        return await bearer_client.request(
+            method, url, headers={"Authorization": f"Bearer {token}"}, **kwargs
+        )
+
+
+async def test_bearer_key_cannot_add_member(client, client2, client3, api_app):
+    alice, _bob, _carol = await _users(client, client2, client3)
+    token = await _mint_key(client, alice)
+
+    response = await _bearer_request(
+        api_app,
+        "POST",
+        f"{BASE}/members",
+        token,
+        json={"email": "bob@example.com", "role": "owner"},
+    )
+    listed = await client.get(f"{BASE}/members")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "session_required"
+    assert response.json()["title"] == "This action requires signing in with a session"
+    assert [m["email"] for m in listed.json()] == ["alice@example.com"]
+
+
+async def test_bearer_key_cannot_remove_member(client, client2, client3, api_app, db):
+    alice, bob, _carol = await _users(client, client2, client3)
+    await _join(db, client2, alice, bob, "member")
+    token = await _mint_key(client, alice)
+
+    response = await _bearer_request(
+        api_app, "DELETE", f"{BASE}/members/{bob['user']['id']}", token
+    )
+    listed = await client.get(f"{BASE}/members")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "session_required"
+    assert response.json()["title"] == "This action requires signing in with a session"
+    assert {m["email"] for m in listed.json()} == {"alice@example.com", "bob@example.com"}
+
+
+async def test_bearer_key_can_list_members_and_audit(client, client2, client3, api_app):
+    alice, _bob, _carol = await _users(client, client2, client3)
+    token = await _mint_key(client, alice)
+
+    members_response = await _bearer_request(api_app, "GET", f"{BASE}/members", token)
+    audit_response = await _bearer_request(api_app, "GET", f"{BASE}/audit", token)
+
+    assert members_response.status_code == 200
+    assert audit_response.status_code == 200
+
+
+async def test_member_cannot_remove(client, client2, client3, db):
+    alice, bob, _carol = await _users(client, client2, client3)
+    bob = await _join(db, client2, alice, bob, "member")
+
+    response = await client2.delete(f"{BASE}/members/{alice['user']['id']}", headers=csrf(bob))
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "forbidden"
+
+
+async def test_removed_member_keys_stay_revoked_after_readd(client, client2, client3, api_app, db):
+    alice, bob, _carol = await _users(client, client2, client3)
+    own_key = await _mint_key(client2, bob, name="own tenant")
+    bob = await _join(db, client2, alice, bob, "member")
+    joined_key = await _mint_key(client2, bob, name="alice tenant")
+    other_session = await client3.post(
+        "/api/v1/auth/login", json={"email": "bob@example.com", "password": PASSWORD}
+    )
+    assert other_session.status_code == 200, other_session.text
+    assert (await _bearer_request(api_app, "GET", ME, joined_key)).status_code == 200
+
+    removed = await client.delete(f"{BASE}/members/{bob['user']['id']}", headers=csrf(alice))
+    readded = await _add(client, alice, "bob@example.com", "member")
+
+    assert removed.status_code == 204
+    assert readded.status_code == 201
+    assert (await _bearer_request(api_app, "GET", ME, joined_key)).status_code == 401
+    assert (await client2.get(ME)).status_code == 401
+    # Credentials of the same user in other tenants are untouched.
+    assert (await _bearer_request(api_app, "GET", ME, own_key)).status_code == 200
+    assert (await client3.get(ME)).status_code == 200
+
+
+async def test_audit_cursor_key_too_long_400(client):
+    await signup(client)
+    cursor = encode_cursor(datetime.now(UTC), "9" * 6720)
+
+    response = await client.get(f"{BASE}/audit", params={"cursor": cursor})
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_cursor"
+
+
+async def test_owner_locks_are_taken_in_user_id_order(db):
+    async with db.system_tx() as conn:
+        tenant = await tenants.insert_tenant(conn, "Locks")
+        for index in range(8):
+            user = await users.insert_user(conn, f"owner{index}@example.com", "x", f"Owner {index}")
+            await tenants.add_membership(conn, tenant["id"], user["id"], "owner")
+        owner_ids = await members.lock_owner_ids(conn, tenant["id"])
+
+    assert len(owner_ids) == 8
+    assert owner_ids == sorted(owner_ids)
+
+
+async def test_owner_who_lost_ownership_mid_request_cannot_remove(
+    client, client2, client3, api_app, db, monkeypatch
+):
+    alice, bob, _carol = await _users(client, client2, client3)
+    await _join(db, client2, alice, bob, "owner")
+    original = api_app.state.auth.resolve_session
+
+    async def resolve_then_lose_ownership(token):
+        principal = await original(token)
+        if principal is not None and str(principal.user_id) == alice["user"]["id"]:
+            async with db.system_tx() as conn:
+                await members.delete_membership(
+                    conn, principal.tenant_id, UUID(alice["user"]["id"])
+                )
+        return principal
+
+    monkeypatch.setattr(api_app.state.auth, "resolve_session", resolve_then_lose_ownership)
+
+    response = await client.delete(f"{BASE}/members/{bob['user']['id']}", headers=csrf(alice))
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "insufficient_permission"
+    async with db.system_tx() as conn:
+        assert await tenants.get_membership(conn, alice["tenant"]["id"], bob["user"]["id"])

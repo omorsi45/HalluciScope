@@ -14,7 +14,7 @@ from backend.api.pagination import (
     page_params,
 )
 from backend.api.schemas_v1 import AuditOut, MemberAddIn, MemberOut
-from backend.auth.deps import current_principal, get_db, require_role
+from backend.auth.deps import current_principal, get_db, require_role, require_session
 from backend.auth.service import Principal
 from backend.db.pool import Database
 from backend.db.repos import audit, members, tenants, users
@@ -41,6 +41,7 @@ async def list_members(
 @router.post("/members", response_model=MemberOut, status_code=201)
 async def add_member(
     body: MemberAddIn,
+    _session: Principal = Depends(require_session),
     principal: Principal = Depends(_ADMINS),
     db: Database = Depends(get_db),
 ) -> MemberOut:
@@ -70,12 +71,16 @@ async def add_member(
 @router.delete("/members/{user_id}", status_code=204)
 async def remove_member(
     user_id: UUID,
+    _session: Principal = Depends(require_session),
     principal: Principal = Depends(_ADMINS),
     db: Database = Depends(get_db),
 ) -> Response:
     async with db.system_tx() as conn:
         # Locking the owner rows first makes the last-owner check and the delete race-safe.
         owner_ids = await members.lock_owner_ids(conn, principal.tenant_id)
+        if principal.role == "owner" and principal.user_id not in owner_ids:
+            # Ownership was lost between authentication and this transaction.
+            raise _insufficient_permission()
         target = await tenants.get_membership(conn, principal.tenant_id, user_id)
         if target is None:
             raise ApiError(404, "member_not_found", "No such member")
@@ -85,6 +90,7 @@ async def remove_member(
             if len(owner_ids) <= 1:
                 raise ApiError(409, "last_owner", "A workspace needs at least one owner")
         await members.delete_membership(conn, principal.tenant_id, user_id)
+        await members.revoke_user_credentials(conn, principal.tenant_id, user_id)
         await audit.record(
             conn,
             action="member_removed",
