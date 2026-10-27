@@ -1,8 +1,10 @@
 """Request and response models for /api/v1."""
 
+from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, StringConstraints
 
 
 class RegisterIn(BaseModel):
@@ -42,3 +44,19 @@ class MeOut(BaseModel):
 
 class SwitchTenantIn(BaseModel):
     tenant_id: UUID
+
+
+class ApiKeyCreateIn(BaseModel):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+
+class ApiKeyOut(BaseModel):
+    id: UUID
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None
+
+
+class ApiKeyCreatedOut(ApiKeyOut):
+    token: str

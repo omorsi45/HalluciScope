@@ -302,6 +302,14 @@ class AuthService:
             info = await api_keys.insert_api_key(
                 conn, principal.tenant_id, principal.user_id, name, prefix, token_hash(token)
             )
+            await audit.record(
+                conn,
+                action="api_key_created",
+                tenant_id=principal.tenant_id,
+                user_id=principal.user_id,
+                target_type="api_key",
+                target_id=str(info["id"]),
+            )
         return info, token
 
     async def list_api_keys(self, principal: Principal) -> list[dict]:
@@ -313,4 +321,12 @@ class AuthService:
             key = await api_keys.get(conn, key_id, principal.tenant_id)
             if key is None or (principal.role == "member" and key["user_id"] != principal.user_id):
                 raise AuthError("not_found", 404)
-            await api_keys.revoke(conn, key_id, principal.tenant_id)
+            if await api_keys.revoke(conn, key_id, principal.tenant_id):
+                await audit.record(
+                    conn,
+                    action="api_key_revoked",
+                    tenant_id=principal.tenant_id,
+                    user_id=principal.user_id,
+                    target_type="api_key",
+                    target_id=str(key_id),
+                )
