@@ -179,7 +179,9 @@ async def replace_grants(
         if len(set(user_ids)) != len(user_ids):
             raise ApiError(422, "validation_error", "Validation error", "grants: duplicate user_id")
         if await collections.count_members(conn, principal.tenant_id, user_ids) != len(user_ids):
-            raise ApiError(422, "not_a_member", "Every grantee must be a member of this workspace")
+            raise ApiError(
+                422, "grantee_not_member", "Every grantee must be a member of this workspace"
+            )
         await collections.replace_grants(
             conn,
             principal.tenant_id,

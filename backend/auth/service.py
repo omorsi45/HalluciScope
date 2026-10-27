@@ -334,7 +334,7 @@ class AuthService:
             key = await api_keys.get(conn, key_id, principal.tenant_id)
             may_revoke_any = principal.role in _KEY_ADMIN_ROLES
             if key is None or not (may_revoke_any or key["user_id"] == principal.user_id):
-                raise AuthError("not_found", 404)
+                raise AuthError("api_key_not_found", 404)
             if await api_keys.revoke(conn, key_id, principal.tenant_id):
                 await audit.record(
                     conn,

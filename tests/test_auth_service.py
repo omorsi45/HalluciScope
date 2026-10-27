@@ -314,7 +314,7 @@ async def test_member_cannot_revoke_others_key(auth, db):
         auth="session",
     )
 
-    await _expect_code(auth.revoke_api_key(member, info["id"]), "not_found", 404)
+    await _expect_code(auth.revoke_api_key(member, info["id"]), "api_key_not_found", 404)
     assert await auth.resolve_api_key(token) is not None
 
     own, own_token = await auth.create_api_key(member, "mine")
@@ -334,7 +334,7 @@ async def _user_id(db, email):
 async def test_revoke_unknown_key_not_found(auth):
     await _register(auth)
     principal = (await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")).principal
-    await _expect_code(auth.revoke_api_key(principal, uuid.uuid4()), "not_found", 404)
+    await _expect_code(auth.revoke_api_key(principal, uuid.uuid4()), "api_key_not_found", 404)
 
 
 async def test_switch_tenant(auth, db):
@@ -584,7 +584,7 @@ async def test_owner_of_other_tenant_cannot_revoke_key(auth):
     assert bob.role == "owner"
     assert bob.tenant_id != alice.tenant_id
 
-    await _expect_code(auth.revoke_api_key(bob, info["id"]), "not_found", 404)
+    await _expect_code(auth.revoke_api_key(bob, info["id"]), "api_key_not_found", 404)
     assert await auth.resolve_api_key(token) is not None
 
 

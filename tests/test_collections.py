@@ -154,7 +154,7 @@ async def test_grant_to_non_member_422(client, client2, client3, db):
     grants = await client.get(f"{COLLECTIONS}/{created['id']}/grants")
 
     assert response.status_code == 422
-    assert response.json()["code"] == "not_a_member"
+    assert response.json()["code"] == "grantee_not_member"
     assert carol["user"]["id"] not in response.text
     assert duplicates.status_code == 422
     assert duplicates.json()["code"] == "validation_error"

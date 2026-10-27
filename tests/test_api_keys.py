@@ -106,7 +106,8 @@ async def test_member_cannot_revoke_other_users_key(client, client2, db, api_app
     response = await client2.delete(f"{KEYS}/{created['id']}", headers=csrf(bob))
 
     assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "api_key_not_found"
+    assert response.json()["title"] == "API key not found"
     assert await _key_status(api_app, created["token"]) == 200
     assert [item["id"] for item in (await client.get(KEYS)).json()] == [created["id"]]
 
@@ -131,7 +132,8 @@ async def test_cannot_revoke_key_from_another_tenant(client, client2, api_app):
     response = await client.delete(f"{KEYS}/{bobs_key['id']}", headers=csrf(alice))
 
     assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "api_key_not_found"
+    assert response.json()["title"] == "API key not found"
     assert await _key_status(api_app, bobs_key["token"]) == 200
 
 
@@ -211,7 +213,8 @@ async def test_revoke_unknown_key_is_not_found(client):
     response = await client.delete(f"{KEYS}/{uuid4()}", headers=csrf(session))
 
     assert response.status_code == 404
-    assert response.json()["code"] == "not_found"
+    assert response.json()["code"] == "api_key_not_found"
+    assert response.json()["title"] == "API key not found"
 
 
 @pytest.mark.parametrize("name", ["", "   ", "x" * 101])
