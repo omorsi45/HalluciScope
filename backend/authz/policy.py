@@ -29,37 +29,25 @@ def _not_found() -> ApiError:
     return ApiError(404, "collection_not_found", "Collection not found")
 
 
-async def effective_permission(
-    conn: AsyncConnection, principal: Principal, collection_id: UUID
-) -> str | None:
-    """The caller's permission on an existing collection, or None."""
-    cur = await conn.execute(
-        "select g.permission from collections c "
-        "left join collection_grants g on g.collection_id = c.id and g.user_id = %s "
-        "where c.id = %s",
-        (principal.user_id, collection_id),
-    )
-    row = await cur.fetchone()
-    if row is None:
-        return None
-    if is_tenant_admin(principal):
-        return "admin"
-    return row["permission"]
-
-
 async def require_collection(
     conn: AsyncConnection,
     principal: Principal,
     collection_id: UUID,
     needed: Literal["read", "write", "admin"],
+    *,
+    kinds: Sequence[str] = ("normal",),
 ) -> dict[str, Any]:
-    """Return the collection row plus the caller's effective ``permission``."""
+    """Return the collection row plus the caller's effective ``permission``.
+
+    A collection of a kind outside ``kinds`` is reported as not found, so by-id routes
+    cannot reach quick or benchmark collections unless a caller asks for them.
+    """
     cur = await conn.execute(
         f"select {_COLLECTION_COLUMNS}, g.permission as granted "
         "from collections c "
         "left join collection_grants g on g.collection_id = c.id and g.user_id = %s "
-        "where c.id = %s",
-        (principal.user_id, collection_id),
+        "where c.id = %s and c.kind = any(%s)",
+        (principal.user_id, collection_id, list(kinds)),
     )
     row = await cur.fetchone()
     if row is None:

@@ -256,3 +256,32 @@ async def test_lone_surrogate_in_collection_name_is_422(client):
 
     assert response.status_code == 422
     assert response.json()["code"] == "validation_error"
+
+
+@pytest.mark.parametrize("kind", ["quick", "benchmark"])
+async def test_by_id_routes_do_not_expose_non_normal_collections(client, db, kind):
+    alice = await signup(client)
+    tenant_id = UUID(alice["tenant"]["id"])
+    async with db.tenant_tx(tenant_id) as conn:
+        cur = await conn.execute(
+            "insert into collections (tenant_id, name, kind) values (%s, 'Scratch', %s) "
+            "returning id",
+            (tenant_id, kind),
+        )
+        collection_id = (await cur.fetchone())["id"]
+    url = f"{COLLECTIONS}/{collection_id}"
+    headers = csrf(alice)
+
+    responses = [
+        await client.get(url),
+        await client.patch(url, json={"name": "Renamed"}, headers=headers),
+        await client.get(f"{url}/grants"),
+        await _put_grants(client, alice, collection_id, []),
+        await client.delete(url, headers=headers),
+    ]
+
+    assert [r.status_code for r in responses] == [404] * 5
+    assert {r.json()["code"] for r in responses} == {"collection_not_found"}
+    async with db.tenant_tx(tenant_id) as conn:
+        cur = await conn.execute("select name from collections where id = %s", (collection_id,))
+        assert (await cur.fetchone())["name"] == "Scratch"
