@@ -10,6 +10,17 @@ class Settings(BaseSettings):
     nli_model_name: str = "cross-encoder/nli-deberta-v3-large"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"
 
+    # EvidenceGraph retrieval models (the embedding column is vector(384))
+    embedder_model: str = "BAAI/bge-small-en-v1.5"
+    embedding_dim: int = 384
+    reranker_model: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
+    model_device: str = "auto"
+    embed_batch_size: int = 32
+
+    # Ingestion limits
+    max_upload_bytes: int = 20_971_520
+    parse_timeout_s: float = 60.0
+
     # Chunking
     chunk_size: int = 512
     chunk_overlap: int = 50
