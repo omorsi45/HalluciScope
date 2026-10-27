@@ -4,6 +4,7 @@ import httpx
 from fastapi import FastAPI
 
 from backend.api.app import create_app
+from backend.auth.service import AuthService
 from backend.config import Settings
 from backend.core.chunker import Chunker
 from backend.core.ensemble import EnsembleScorer
@@ -40,6 +41,7 @@ def create_configured_app() -> FastAPI:
         repo = None
         try:
             app.state.db = db
+            app.state.auth = AuthService(db, settings)
             http_client = httpx.AsyncClient(timeout=120.0)
             embedding_model = get_embedding_model()
             tokenizer, nli_model = get_nli_model()

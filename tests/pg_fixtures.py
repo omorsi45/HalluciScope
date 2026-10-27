@@ -3,12 +3,16 @@
 import os
 import uuid
 
+import httpx
 import psycopg
 import pytest
 import pytest_asyncio
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 
+from backend.api.app import create_app
+from backend.auth.service import AuthService
+from backend.config import Settings
 from backend.db.migrate import migrate
 from backend.db.pool import Database
 
@@ -18,6 +22,10 @@ ADMIN_URL = os.environ.get(
 
 __all__ = [
     "ADMIN_URL",
+    "api_app",
+    "api_settings",
+    "client",
+    "client2",
     "create_database",
     "db",
     "drop_database",
@@ -120,3 +128,34 @@ async def db(pg_urls):
                         sql.SQL(", ").join(sql.Identifier(t) for t in tables)
                     )
                 )
+
+
+@pytest.fixture
+def api_settings():
+    return Settings(dev_insecure_cookies=True, cors_origins=["http://localhost:5173"])
+
+
+@pytest.fixture
+def api_app(db, api_settings):
+    """App on the test database. ASGITransport skips lifespan, so state is set directly."""
+    app = create_app(api_settings)
+    app.state.db = db
+    app.state.auth = AuthService(db, api_settings)
+    return app
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def client(api_app):
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api_app), base_url="http://test"
+    ) as http_client:
+        yield http_client
+
+
+@pytest_asyncio.fixture(loop_scope="session")
+async def client2(api_app):
+    """Second client with its own cookie jar, for two-user tests."""
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=api_app), base_url="http://test"
+    ) as http_client:
+        yield http_client
