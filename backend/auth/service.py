@@ -40,6 +40,7 @@ _DISPLAY_NAME_MAX = 100
 _THROTTLE_WINDOW_MINUTES = 15
 _EMAIL_FAILURE_LIMIT = 5
 _IP_FAILURE_LIMIT = 20
+_KEY_ADMIN_ROLES = frozenset({"owner", "admin"})
 
 
 def utcnow() -> datetime:
@@ -78,6 +79,12 @@ def _normalize_email(email: str) -> str:
     if not _EMAIL_RE.fullmatch(normalized):
         raise AuthError("invalid_email", 422)
     return normalized
+
+
+def _require_session(principal: Principal) -> None:
+    """API keys must not mint or revoke API keys, so a leaked key cannot persist itself."""
+    if principal.auth == "api_key":
+        raise AuthError("session_required", 403)
 
 
 class AuthService:
@@ -297,6 +304,7 @@ class AuthService:
         )
 
     async def create_api_key(self, principal: Principal, name: str) -> tuple[dict, str]:
+        _require_session(principal)
         token, prefix = new_api_key()
         async with self._db.system_tx() as conn:
             info = await api_keys.insert_api_key(
@@ -317,9 +325,11 @@ class AuthService:
             return await api_keys.list_for_user(conn, principal.tenant_id, principal.user_id)
 
     async def revoke_api_key(self, principal: Principal, key_id: UUID) -> None:
+        _require_session(principal)
         async with self._db.system_tx() as conn:
             key = await api_keys.get(conn, key_id, principal.tenant_id)
-            if key is None or (principal.role == "member" and key["user_id"] != principal.user_id):
+            may_revoke_any = principal.role in _KEY_ADMIN_ROLES
+            if key is None or not (may_revoke_any or key["user_id"] == principal.user_id):
                 raise AuthError("not_found", 404)
             if await api_keys.revoke(conn, key_id, principal.tenant_id):
                 await audit.record(

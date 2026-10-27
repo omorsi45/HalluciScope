@@ -265,6 +265,20 @@ async def test_api_key_resolve_touch_and_revoke(auth, db):
     assert await auth.resolve_api_key(token) is None
 
 
+async def test_api_key_principal_cannot_create_or_revoke_keys(auth):
+    await _register(auth)
+    session_principal = (await auth.login("alice@example.com", PASSWORD, ip="1.1.1.1")).principal
+    info, token = await auth.create_api_key(session_principal, "ci")
+    key_principal = await auth.resolve_api_key(token)
+    assert key_principal is not None
+
+    await _expect_code(auth.create_api_key(key_principal, "minted"), "session_required", 403)
+    await _expect_code(auth.revoke_api_key(key_principal, info["id"]), "session_required", 403)
+
+    assert [k["id"] for k in await auth.list_api_keys(session_principal)] == [info["id"]]
+    assert await auth.resolve_api_key(token) is not None
+
+
 async def test_malformed_api_key_rejected(auth):
     assert await auth.resolve_api_key("not-an-api-key") is None
 

@@ -35,6 +35,7 @@ _AUTH_TITLES = {
     "registration_disabled": "Registration disabled",
     "not_a_member": "Not a member of this workspace",
     "api_key_tenant_fixed": "API keys cannot switch workspace",
+    "session_required": "This action requires signing in with a session",
     "not_found": "Not found",
 }
 
