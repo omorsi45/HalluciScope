@@ -4,9 +4,15 @@ from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from uuid import UUID
 
+from pgvector.psycopg import register_vector_async
 from psycopg import AsyncConnection
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+
+
+async def _configure(conn: AsyncConnection) -> None:
+    # Needs the vector extension, which migration 0001 creates: migrate before opening the pool.
+    await register_vector_async(conn)
 
 
 class Database:
@@ -16,6 +22,7 @@ class Database:
             min_size=min_size,
             max_size=max_size,
             open=False,
+            configure=_configure,
             # Replace connections that died while idle (for example after a Postgres restart).
             check=AsyncConnectionPool.check_connection,
             kwargs={"autocommit": True, "row_factory": dict_row},
