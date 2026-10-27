@@ -178,6 +178,17 @@ def _serve(token):
     return server, f"http://{host}:{port}"
 
 
+@pytest.mark.parametrize("token", ["", " ", "  \t "])
+def test_metrics_server_treats_a_blank_token_as_unconfigured(token):
+    server, base = _serve(token)
+    try:
+        assert _get(f"{base}/metrics")[0] == 404
+        assert _get(f"{base}/metrics", token=token or "x")[0] == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_metrics_server_auth():
     server, base = _serve(None)
     try:

@@ -948,9 +948,10 @@ class _Harness:
 
 async def test_run_worker_waits_for_other_slots_when_one_slot_fails(monkeypatch):
     harness = _Harness(monkeypatch, slot_zero_raises=True)
+    settings = Settings(worker_concurrency=2, metrics_token="t")
 
     with pytest.raises(RuntimeError):
-        await asyncio.wait_for(_run_worker(Settings(worker_concurrency=2)), LIMIT_S)
+        await asyncio.wait_for(_run_worker(settings), LIMIT_S)
 
     events = harness.events
     assert "slot1.stopped" in events
@@ -980,6 +981,28 @@ async def test_run_worker_closes_the_database_when_the_metrics_server_fails(monk
     harness = _Harness(monkeypatch, metrics_raises=True)
 
     with pytest.raises(OSError):
-        await asyncio.wait_for(_run_worker(Settings(worker_concurrency=1)), LIMIT_S)
+        await asyncio.wait_for(
+            _run_worker(Settings(worker_concurrency=1, metrics_token="t")), LIMIT_S
+        )
 
     assert harness.events == ["db.open", "db.close"]
+
+
+
+
+@pytest.mark.parametrize("token", [None, "", "   "])
+async def test_run_worker_skips_the_metrics_server_without_a_token(monkeypatch, caplog, token):
+    harness = _Harness(monkeypatch)
+    settings = Settings(worker_concurrency=1, metrics_token=token)
+
+    task = asyncio.create_task(_run_worker(settings))
+    with caplog.at_level(logging.INFO, logger="backend.cli.main"):
+        # Workers are built after the signal handlers are installed, so SIGINT is safe then.
+        await _until(lambda: _has(harness.failure_handlers, 1))
+        os.kill(os.getpid(), signal.SIGINT)
+        await asyncio.wait_for(task, LIMIT_S)
+
+    assert "metrics.start" not in harness.events
+    assert [r.getMessage() for r in caplog.records if r.name == "backend.cli.main"] == [
+        "worker metrics disabled"
+    ]

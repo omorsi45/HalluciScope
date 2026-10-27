@@ -13,7 +13,8 @@ CONTENT_TYPE = "text/plain; version=0.0.4"
 def start_metrics_server(
     host: str, port: int, token: str | None, registry: Registry = REGISTRY
 ) -> ThreadingHTTPServer:
-    expected = f"Bearer {token}".encode() if token else None
+    # An empty or whitespace-only token means "not configured", never "open".
+    expected = f"Bearer {token}".encode() if token and token.strip() else None
 
     class Handler(BaseHTTPRequestHandler):
         def _reply(self, status: int, body: bytes = b"", extra: dict[str, str] | None = None):

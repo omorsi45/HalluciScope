@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 
 import typer
@@ -9,6 +10,8 @@ from rich.text import Text
 from backend.config import Settings
 from backend.core.document import parse_document
 from backend.core.ensemble import ConfidenceTier
+
+logger = logging.getLogger(__name__)
 
 app = typer.Typer(name="halluciscope", help="Multi-signal hallucination detection for RAG QA")
 console = Console()
@@ -139,9 +142,12 @@ async def _run_worker(settings: Settings) -> None:
     installed: list[signal.Signals] = []
     try:
         await db.open()
-        metrics_server = start_metrics_server(
-            "127.0.0.1", settings.worker_metrics_port, settings.metrics_token
-        )
+        if settings.metrics_token and settings.metrics_token.strip():
+            metrics_server = start_metrics_server(
+                "127.0.0.1", settings.worker_metrics_port, settings.metrics_token
+            )
+        else:
+            logger.info("worker metrics disabled")
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop.set)
             installed.append(sig)
