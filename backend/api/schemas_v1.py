@@ -4,18 +4,41 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, BaseModel, Field, StringConstraints
+
+_SURROGATES = range(0xD800, 0xE000)
+
+
+def _reject_surrogates(value: str) -> str:
+    """Lone surrogates cannot be encoded as UTF-8 and would crash hashing or storage."""
+    if any(ord(char) in _SURROGATES for char in value):
+        raise ValueError("must not contain lone surrogate characters")
+    return value
+
+
+# Every request string ends with the surrogate check so a JSON "\ud800" is a 422, not a 500.
+# The constraints come first: stacking them on an already validated str skips the strip.
+_NO_SURROGATES = AfterValidator(_reject_surrogates)
+Email = Annotated[str, StringConstraints(max_length=320), _NO_SURROGATES]
+Password = Annotated[str, StringConstraints(max_length=256), _NO_SURROGATES]
+DisplayName = Annotated[str, StringConstraints(max_length=100), _NO_SURROGATES]
+Name = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=100),
+    _NO_SURROGATES,
+]
+Description = Annotated[str, StringConstraints(max_length=1000), _NO_SURROGATES]
 
 
 class RegisterIn(BaseModel):
-    email: str
-    password: str
-    display_name: str
+    email: Email
+    password: Password
+    display_name: DisplayName
 
 
 class LoginIn(BaseModel):
-    email: str
-    password: str
+    email: Email
+    password: Password
 
 
 class UserOut(BaseModel):
@@ -47,7 +70,7 @@ class SwitchTenantIn(BaseModel):
 
 
 class ApiKeyCreateIn(BaseModel):
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    name: Name
 
 
 class ApiKeyOut(BaseModel):
@@ -63,16 +86,13 @@ class ApiKeyCreatedOut(ApiKeyOut):
 
 
 class CollectionIn(BaseModel):
-    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-    description: Annotated[str, StringConstraints(max_length=1000)] = ""
+    name: Name
+    description: Description = ""
 
 
 class CollectionPatch(BaseModel):
-    name: (
-        Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-        | None
-    ) = None
-    description: Annotated[str, StringConstraints(max_length=1000)] | None = None
+    name: Name | None = None
+    description: Description | None = None
 
 
 class CollectionOut(BaseModel):
@@ -109,7 +129,7 @@ class MemberOut(BaseModel):
 
 
 class MemberAddIn(BaseModel):
-    email: str
+    email: Email
     role: Literal["owner", "admin", "member"]
 
 

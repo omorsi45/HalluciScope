@@ -37,6 +37,7 @@ Role = Literal["owner", "admin", "member"]
 
 _EMAIL_RE = re.compile(r"[^@\s]{1,64}@[^@\s]{1,255}")
 _DISPLAY_NAME_MAX = 100
+_EMAIL_MAX = 320
 _THROTTLE_WINDOW_MINUTES = 15
 _EMAIL_FAILURE_LIMIT = 5
 _IP_FAILURE_LIMIT = 20
@@ -130,6 +131,9 @@ class AuthService:
 
     async def login(self, email: str, password: str, *, ip: str) -> LoginResult:
         normalized = email.strip().lower()
+        if len(normalized) > _EMAIL_MAX:
+            # No account can have this email; skip the throttle table, whose index has a row limit.
+            raise AuthError("invalid_credentials", 401)
         now = self._clock()
         window = self._window_start(now)
         email_key = f"email:{normalized}"

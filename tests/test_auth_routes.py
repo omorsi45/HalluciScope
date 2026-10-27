@@ -254,3 +254,44 @@ async def test_principal_context_vars_are_per_request(client, api_app):
     assert anonymous.json() == {"tenant": None, "user": None}
     assert tenant_id_var.get() is None
     assert user_id_var.get() is None
+
+
+async def test_login_rejects_oversized_email_with_422(client):
+    response = await client.post(
+        f"{AUTH}/login", json={"email": "a" * 4096 + "@example.com", "password": PASSWORD}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_login_email_over_320_characters_is_422(client):
+    email = "a" * 309 + "@example.com"  # 321 characters
+    assert len(email) == 321
+
+    response = await client.post(f"{AUTH}/login", json={"email": email, "password": PASSWORD})
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_register_rejects_lone_surrogate_password_with_422(client):
+    # Raw bytes: a Python client cannot serialize a lone surrogate, a JSON escape can.
+    raw = b'{"email": "a@example.com", "password": "\\ud800 correct horse", "display_name": "A"}'
+
+    response = await client.post(
+        f"{AUTH}/register", content=raw, headers={"Content-Type": "application/json"}
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"
+
+
+async def test_register_rejects_oversized_password_and_display_name(client):
+    base = {"email": "a@example.com", "password": PASSWORD, "display_name": "A"}
+
+    long_password = await client.post(f"{AUTH}/register", json={**base, "password": "p" * 257})
+    long_name = await client.post(f"{AUTH}/register", json={**base, "display_name": "n" * 101})
+
+    assert long_password.status_code == 422
+    assert long_name.status_code == 422

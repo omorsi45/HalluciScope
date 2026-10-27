@@ -242,3 +242,17 @@ async def test_readable_collection_ids_rejects_unreadable(client, client2, clien
     assert excinfo.value.status == 404
     assert excinfo.value.code == "collection_not_found"
     assert explicit == (UUID(granted["id"]),)
+
+
+async def test_lone_surrogate_in_collection_name_is_422(client):
+    session = await signup(client)
+    raw = b'{"name": "bad\\ud800name", "description": ""}'
+
+    response = await client.post(
+        COLLECTIONS,
+        content=raw,
+        headers={**csrf(session), "Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "validation_error"

@@ -612,3 +612,11 @@ async def test_only_login_lookup_returns_password_hash(auth, db):
     assert "password_hash" not in by_id
     assert record["password_hash"].startswith("scrypt$")
     assert record["id"] == user_id
+
+
+async def test_login_with_oversized_email_skips_the_throttle_table(auth, db):
+    await _expect_code(
+        auth.login("a" * 4096 + "@example.com", PASSWORD, ip="1.1.1.1"), "invalid_credentials", 401
+    )
+
+    assert await _fetch(db, "select 1 from auth_throttle where left(key, 6) = 'email:'") == []
