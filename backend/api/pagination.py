@@ -72,7 +72,9 @@ class PageParams:
     after: tuple[datetime, str] | None
 
 
-async def page_params(limit: int = Query(20, ge=1, le=100), cursor: str | None = None) -> PageParams:
+async def page_params(
+    limit: int = Query(20, ge=1, le=100), cursor: str | None = None
+) -> PageParams:
     return PageParams(limit=limit, after=decode_cursor(cursor) if cursor else None)
 
 
