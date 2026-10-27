@@ -34,6 +34,9 @@ class Database:
             yield conn
 
     def tenant_tx(self, tenant_id: UUID) -> AbstractAsyncContextManager[AsyncConnection]:
+        if not isinstance(tenant_id, UUID):
+            # None or a str would otherwise become "None" or arbitrary text in the setting.
+            raise TypeError("tenant_id must be a UUID")
         return self._tx(str(tenant_id))
 
     def system_tx(self) -> AbstractAsyncContextManager[AsyncConnection]:

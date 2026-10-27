@@ -180,7 +180,7 @@ async def test_removed_member_loses_session_and_grants(client, client2, client3,
 
     assert removed.status_code == 204
     assert (await client2.get("/api/v1/auth/me")).status_code == 401
-    async with db.tenant_tx(alice["tenant"]["id"]) as conn:
+    async with db.tenant_tx(UUID(alice["tenant"]["id"])) as conn:
         cur = await conn.execute(
             "select user_id from collection_grants where collection_id = %s", (collection_id,)
         )
