@@ -34,6 +34,12 @@ def test_discover_rejects_duplicate_versions(tmp_path):
         discover(tmp_path)
 
 
+async def test_migrate_refuses_an_empty_migrations_directory(tmp_path):
+    # Unreachable on purpose: the error must come before any connection attempt.
+    with pytest.raises(MigrationError, match="no migrations found"):
+        await migrate("postgresql://eg_owner@localhost:1/none", tmp_path)
+
+
 def test_settings_defaults():
     settings = Settings()
     assert settings.database_url == "postgresql://eg_app@localhost:54329/evidencegraph"

@@ -78,6 +78,9 @@ def _verify(migrations: list[Migration], applied: dict[int, str]) -> None:
 
 async def migrate(url: str, directory: Path = MIGRATIONS_DIR) -> list[int]:
     migrations = discover(directory)
+    if not migrations:
+        # A wrong directory would otherwise report "up to date" against an unmigrated database.
+        raise MigrationError("no migrations found")
     newly_applied: list[int] = []
     async with await psycopg.AsyncConnection.connect(url, autocommit=True) as conn:
         _verify(migrations, await _bootstrap(conn))
