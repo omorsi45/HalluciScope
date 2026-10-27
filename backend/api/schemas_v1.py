@@ -98,3 +98,26 @@ class GrantOut(BaseModel):
     email: str
     display_name: str
     permission: str
+
+
+class MemberOut(BaseModel):
+    user_id: UUID
+    email: str
+    display_name: str
+    role: str
+    created_at: datetime
+
+
+class MemberAddIn(BaseModel):
+    email: str
+    role: Literal["owner", "admin", "member"]
+
+
+class AuditOut(BaseModel):
+    id: int
+    action: str
+    user_id: UUID | None
+    target_type: str | None
+    target_id: str | None
+    at: datetime
+    details: dict | None
