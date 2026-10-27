@@ -47,3 +47,18 @@ Rulings:
 - Ruling R-B3: Task 21 on this machine creates the bench database with `docker exec eg-pg ...` and runs every command through .local/wsl.sh; the results state "WSL2 Ubuntu on AMD Ryzen 9 7900X, CPU only" and the RAM visible to WSL. The spec's M1 references describe the original machine; scale and hardware are reported as measured. Cost if wrong: none to correctness.
 
 ## Progress
+
+- Ruling: normalize() applies NFC after control-character removal (step 3 before step 1). Why: the plan's literal order is not idempotent when a removed control character separates a base letter from a combining mark (implementer fuzz: 26,057 of 300,000 strings failed); spec 9 requires idempotence. All exact cases in the brief unchanged. Cost if wrong: none found; offsets are defined on the output either way.
+- Task 1: complete (commits 536b023..dee9a0b; acceptance: 478 passed, ruff clean, 6 files in scope)
+
+- Task 2: complete (commits dee9a0b..ac4ef14; acceptance: 489 passed, ruff clean, 2 files in scope). Note: "1. First step" at sentence start does not split after the number (extra guard + test).
+
+- Task 3: complete (commits ac4ef14..b75e2e0; acceptance: 503 passed, ruff clean, 2 files in scope)
+- Task 3: minor (deferred): build_passages has no parameter validation (max_chars < 1 loops in the splitter; target_chars > max_chars can exceed max_chars); callers use the defaults.
+
+- Task 4: complete (commits b75e2e0..38b31bd; acceptance: 543 passed, ruff clean, 4 files in scope)
+- Task 4: minor (deferred): brief's ATX regex turns "# C#" into "C"; inline markers spanning more than 300 chars or across lines are kept (ReDoS bound); setext headings, front matter, escapes, reference links not handled.
+
+- Task 5: complete (commits 38b31bd..ea463f9; acceptance: 631 passed, ruff clean, 3 files in scope)
+- Task 5: IMPORTANT (parked for final fix wave): section-path memory amplification in TextAssembler.start_section (Markdown and HTML). Each SectionSpan path is a fresh join, so a 220 KB hostile input (200,000-char h1 plus 2,000 h2) holds about 400M path chars (~400 MB); a 20 MB upload could need tens of GB inside the parse child before too_long runs. Fix: cap heading component and total path length in TextAssembler.start_section (one place covers every parser), plus a test.
+- Task 5: minor (deferred): HTML is strict UTF-8 only (no charset sniffing); no h1 fallback title.
