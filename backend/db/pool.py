@@ -16,6 +16,8 @@ class Database:
             min_size=min_size,
             max_size=max_size,
             open=False,
+            # Replace connections that died while idle (for example after a Postgres restart).
+            check=AsyncConnectionPool.check_connection,
             kwargs={"autocommit": True, "row_factory": dict_row},
         )
 
