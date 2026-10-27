@@ -121,6 +121,49 @@ def migrate():
     console.print(f"applied: {applied}" if applied else "up to date")
 
 
+async def _run_worker(settings: Settings) -> None:
+    import signal
+
+    from backend.db.pool import Database
+    from backend.jobs.registry import build_handlers
+    from backend.jobs.worker import Worker, default_worker_id
+    from backend.obs.logging import configure_logging
+    from backend.obs.metrics_server import start_metrics_server
+
+    configure_logging(settings.log_level)
+    # Each slot can hold a handler, a job heartbeat and its housekeeping at once.
+    db = Database(settings.database_url, max_size=max(10, 4 * settings.worker_concurrency))
+    await db.open()
+    metrics_server = start_metrics_server(
+        "127.0.0.1", settings.worker_metrics_port, settings.metrics_token
+    )
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    signals = (signal.SIGTERM, signal.SIGINT)
+    for sig in signals:
+        loop.add_signal_handler(sig, stop.set)
+    try:
+        services = None  # Plan B introduces the services container
+        base_id = default_worker_id()
+        workers = [
+            Worker(db, build_handlers(services), services=services, worker_id=f"{base_id}:{slot}")
+            for slot in range(settings.worker_concurrency)
+        ]
+        await asyncio.gather(*(worker.run(stop) for worker in workers))
+    finally:
+        for sig in signals:
+            loop.remove_signal_handler(sig)
+        metrics_server.shutdown()
+        metrics_server.server_close()
+        await db.close()
+
+
+@app.command()
+def worker():
+    """Run the background job worker until SIGTERM or SIGINT."""
+    asyncio.run(_run_worker(Settings()))
+
+
 @app.command()
 def evaluate(
     dataset: str = typer.Option(..., help="Dataset name (halueval, custom, adversarial)"),
