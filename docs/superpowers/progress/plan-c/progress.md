@@ -79,3 +79,9 @@ Rulings:
 - Task 13: attempt 1 root cause (found by attempt 2): the test harness FakeWorker.run waited on stop.wait() forever, so in RED the CLI worker tests hung with no SIGINT. Fixed with a bounded wait (10 s).
 - Task 13: attempt 2 implemented and reached GREEN on focused tests (31 + 16), then the session was interrupted before the full suite and commit. ENV: the eg-pg container exited 255 during the controller's first full run (Docker VM restart, not OOM); restarted, orphan eg_test db dropped. Controller acceptance: 1349 passed, ruff clean, LF, no em dashes; read the error mapping (timeout, LLMFailure, mismatch, retrieval_failed, internal_error) and confirmed the JSON formatter logs only exc_type and frames. Committed by the controller as 05433e5 (9 files in scope).
 - Task 13: complete (commits c4c02e8..05433e5). Decisions in the report: known_at from the database clock; _GuardedRetriever maps any retrieval exception to retrieval_failed; engine built before any LLM call so calibrator_mismatch fails fast; worker validates the artifact before loading models and exits 1 naming the field.
+
+- Task 14: complete (commits 05433e5..4e7f692; acceptance: 1365 passed, ruff clean, 5 files in scope). Redaction also nulls passage_is_current; collection_ids returned as stored (R8 redacts evidence, citations, passages only).
+- Task 14: minor (deferred): three read queries live as private helpers in routes/analyses.py instead of the repo module (brief file list excluded the repo).
+
+- Task 15: complete (commits 4e7f692..4ec6772; acceptance: 1380 passed, ruff clean, 7 files in scope). For a current-version passage, current_equivalent_passage_id is the passage itself.
+- Task 15: minor (deferred): validate_analysis does no authorization (internal; any HTTP exposure must check analysis visibility first).

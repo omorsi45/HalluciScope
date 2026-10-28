@@ -21,7 +21,10 @@ Machine: Omar's Windows PC (PowerShell 5.1 shell, WSL2 Ubuntu 24.04 for Python).
 - Postgres: Docker container `eg-pg` (pgvector/pgvector:pg17, PostgreSQL 17.11, pgvector 0.8.7), superuser `postgres`, trust auth, `localhost:54329`, reachable from WSL. If it is down: `docker start eg-pg`. Do not run `scripts/dev-postgres.sh` (macOS Homebrew). For admin SQL: `docker exec eg-pg psql -U postgres -h localhost -d <db> -v ON_ERROR_STOP=1 -c "<sql>"`. Dev database `evidencegraph` exists with roles `eg_owner` and `eg_app`.
 
 ## Time limits (mandatory)
+- Wrap every WSL command in the Windows-level killer as well, so a stuck WSL session cannot hang your turn: from the worktree root in PowerShell, `.venv\Scripts\python.exe .local\run.py <outer_s> .local\<name>.log -- wsl -d Ubuntu -- bash "<wt-wsl-path>/.local/wsl.sh" timeout <inner_s> <command>` with outer = inner + 60. It prints the log tail and `exit=<code>`. Focused tests: inner 280. Full suite: inner 900.
 - Every pytest, script, or server command runs under Linux `timeout` inside the wrapper (300 s focused, 900 s full suite). Exit code 124 means the limit fired: treat it as a failure, find the cause, never just raise the limit.
+- Test fakes that wait on an event (for example a fake worker waiting on `stop`) must use a bounded wait, so a RED run fails instead of hanging.
+- Write your report file early and append as you go.
 - A RED test must never trigger the expensive or dangerous behavior it guards against (for example a real scrypt call with huge parameters, an unbounded loop, a network call, a model download). Replace the expensive dependency with a spy that records the call and returns immediately or raises, so the RED run fails fast.
 - A previous attempt stalled for an hour this way. Do not repeat it.
 
