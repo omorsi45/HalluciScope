@@ -1,8 +1,11 @@
 """Postgres helpers and fixtures for tests marked `pg`."""
 
 import asyncio
+import hashlib
 import os
 import uuid
+from collections.abc import Sequence
+from datetime import UTC, datetime
 
 import httpx
 import psycopg
@@ -16,6 +19,9 @@ from backend.auth.service import AuthService
 from backend.config import Settings
 from backend.db.migrate import migrate
 from backend.db.pool import Database
+from backend.db.repos import documents
+from backend.ingest.parsers.text import parse_text
+from backend.ingest.service import create_version
 from backend.jobs.registry import build_failure_handlers, build_handlers
 from backend.jobs.worker import Worker
 from backend.services import Services
@@ -40,6 +46,7 @@ __all__ = [
     "fresh_db_url",
     "pg_urls",
     "role_url",
+    "seed_docs",
     "services",
 ]
 
@@ -142,6 +149,48 @@ async def db(pg_urls):
 def services(db):
     """Worker services on the test database, with deterministic fake models."""
     return Services(Settings(), db, HashEmbedder(), KeywordReranker())
+
+
+async def seed_docs(
+    db,
+    services,
+    tenant_id: uuid.UUID,
+    collection_id: uuid.UUID,
+    texts: Sequence[str],
+    *,
+    effective_from: datetime | None = None,
+) -> list[uuid.UUID]:
+    """One document per text, ingested as version 1 through `parse_text` and `create_version`.
+
+    Returns the document ids in the order of `texts`. `effective_from` defaults to now.
+    """
+    effective = effective_from if effective_from is not None else datetime.now(UTC)
+    document_ids = []
+    for index, text in enumerate(texts, start=1):
+        data = text.encode()
+        async with db.tenant_tx(tenant_id) as conn:
+            document_id = await documents.insert_document(
+                conn,
+                tenant_id=tenant_id,
+                collection_id=collection_id,
+                title=f"Document {index}",
+                filename=f"document-{index}.txt",
+                mime_type="text/plain",
+                created_by=None,
+            )
+            await create_version(
+                conn,
+                services.embedder,
+                tenant_id=tenant_id,
+                document_id=document_id,
+                parsed=parse_text(data),
+                blob_sha256=hashlib.sha256(data).digest(),
+                effective_from=effective,
+                created_by=None,
+                settings=services.settings,
+            )
+        document_ids.append(document_id)
+    return document_ids
 
 
 async def drain(db, services, kinds=None) -> int:
