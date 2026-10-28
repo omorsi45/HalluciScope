@@ -1,0 +1,20 @@
+{
+  "nfcorpus": {
+    "fetched_at": "2026-10-28T02:32:17+00:00",
+    "n_docs": 3633,
+    "n_passages": 10964,
+    "n_queries": 323,
+    "sha256": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b",
+    "split": "test",
+    "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nfcorpus.zip"
+  },
+  "scifact": {
+    "fetched_at": "2026-10-28T02:32:15+00:00",
+    "n_docs": 5183,
+    "n_passages": 14741,
+    "n_queries": 300,
+    "sha256": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165",
+    "split": "test",
+    "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/scifact.zip"
+  }
+}
