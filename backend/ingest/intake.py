@@ -84,15 +84,14 @@ async def intake_upload(
     if len(data) > settings.max_upload_bytes:
         raise ApiError(413, "too_large", "File too large")
     now = datetime.now(UTC)
-    if effective_from is None:
-        effective_from = now
-    elif effective_from > now + FUTURE_TOLERANCE:
+    if effective_from is not None and effective_from > now + FUTURE_TOLERANCE:
         raise ApiError(422, "effective_from_in_future", "effective_from is in the future")
     title = (title if title is not None else os.path.splitext(filename)[0])[:MAX_TITLE_CHARS]
     blob_sha256 = hashlib.sha256(data).digest()
 
     async with db.tenant_tx(principal.tenant_id) as conn:
         current_version_id: UUID | None = None
+        current: dict | None = None
         if document_id is not None:
             document = await documents.get_document(conn, document_id)
             if document is None:
@@ -106,6 +105,12 @@ async def intake_upload(
                     raise _document_not_found() from None
                 raise
             current_version_id = document["current_version_id"]
+            if current_version_id is not None:
+                cur = await conn.execute(
+                    "select blob_sha256, effective_from from document_versions where id = %s",
+                    (current_version_id,),
+                )
+                current = await cur.fetchone()
         else:
             await require_collection(
                 conn, principal, collection_id, "write", kinds=collection_kinds
@@ -120,15 +125,16 @@ async def intake_upload(
                 created_by=principal.user_id,
             )
 
+        if effective_from is None:
+            # Never earlier than the current version, or the worker would reject the new
+            # version as out of order (the current one may be dated up to 60 s ahead, and the
+            # wall clock can step backwards).
+            effective_from = now if current is None else max(now, current["effective_from"])
+
         await documents.insert_blob(conn, principal.tenant_id, blob_sha256, data)
         status: Literal["queued", "duplicate"] = "queued"
-        if current_version_id is not None:
-            cur = await conn.execute(
-                "select blob_sha256 from document_versions where id = %s", (current_version_id,)
-            )
-            current = await cur.fetchone()
-            if bytes(current["blob_sha256"]) == blob_sha256:
-                status = "duplicate"
+        if current is not None and bytes(current["blob_sha256"]) == blob_sha256:
+            status = "duplicate"
         cur = await conn.execute(
             "insert into uploads (tenant_id, document_id, blob_sha256, filename, declared_mime, "
             "effective_from, status, version_id, created_by) "

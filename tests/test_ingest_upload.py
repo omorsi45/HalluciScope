@@ -397,6 +397,34 @@ async def test_out_of_order_effective_from_fails_the_upload_and_adds_nothing(db,
     assert await jobs(db, "reverify_document") == []
 
 
+async def test_default_effective_from_not_before_current_version(db, services, world):
+    # v1 is dated slightly in the future (allowed by the clock-skew tolerance), so a default of
+    # "now" for v2 would precede it. No clock step is needed to reproduce the failure.
+    first = await upload(
+        db,
+        world.owner,
+        V1,
+        collection_id=world.collection_id,
+        effective_from=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    await drain(db, services)
+
+    second = await upload(db, world.owner, V2, document_id=first.document_id)
+    await drain(db, services)
+
+    row = await upload_row(db, world, second.upload_id)
+    assert (row["status"], row["error_code"]) == ("created_version", None)
+    versions = await fetch(
+        db,
+        world.tenant_id,
+        "select effective_from from document_versions where document_id = %s "
+        "order by version_number",
+        (first.document_id,),
+    )
+    assert len(versions) == 2
+    assert versions[1]["effective_from"] == versions[0]["effective_from"]
+
+
 @pytest.mark.parametrize("filename", ["notes.exe", "README", ""])
 async def test_unsupported_extension_415(db, world, filename):
     with pytest.raises(ApiError) as info:
