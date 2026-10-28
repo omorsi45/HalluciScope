@@ -62,3 +62,21 @@ Rulings:
 - Task 5: complete (commits 38b31bd..ea463f9; acceptance: 631 passed, ruff clean, 3 files in scope)
 - Task 5: IMPORTANT (parked for final fix wave): section-path memory amplification in TextAssembler.start_section (Markdown and HTML). Each SectionSpan path is a fresh join, so a 220 KB hostile input (200,000-char h1 plus 2,000 h2) holds about 400M path chars (~400 MB); a 20 MB upload could need tens of GB inside the parse child before too_long runs. Fix: cap heading component and total path length in TextAssembler.start_section (one place covers every parser), plus a test.
 - Task 5: minor (deferred): HTML is strict UTF-8 only (no charset sniffing); no h1 fallback title.
+
+- Task 6: complete (commits ea463f9..2bd9f09; acceptance: 702 passed, ruff clean, 5 files in scope)
+- Task 6: minor (deferred, check in final review): pypdf can emit lone surrogates (category Cs) that Postgres text rejects at insert; normalize could drop Cs characters. AES PDFs need the uninstalled cryptography package and end as bad_pdf, not encrypted_pdf. parse_child is spawned without cwd (worker cwd must hold backend/). Filenames with NUL must be sanitized before the child (Task 10 sanitizes control chars).
+
+- Task 7: complete (commits 2bd9f09..40e2d2e; acceptance: 715 passed, ruff clean, 3 files in scope, migrate applied [3] on dev db). Composite tenant FKs everywhere incl. passages (tenant_id, version_id, document_id); cross-tenant FK test mutation-verified.
+- Task 7: carry-forward: pgvector 0.5.1 returns Vector objects (use .to_numpy()); Database.open() needs the vector extension (migrate before opening the pool).
+- Task 7: IMPORTANT (parked for final fix wave): migrate.py checksums raw bytes, and the repo has no .gitattributes, so a Windows autocrlf checkout hashes migrations as CRLF (0001/0002 here are w/crlf) while Mac/Linux hash LF; 0003 is w/lf now and flips to CRLF when git next rewrites it, after which this dev db refuses to migrate. Fix: .gitattributes `*.sql text eol=lf` (and `*.sh text eol=lf` for Docker scripts), or checksum normalized line endings; add a test. Cost if left: confusing "checksum changed" refusals across checkouts.
+- Task 7: minor (deferred): char_count not constrained to char_length(text) (slice check still bounds slices).
+
+- Task 8: complete (commits 40e2d2e..6e115b9; acceptance: 728 passed + 2 models tests passed per report, ruff clean, 6 files in scope). Legacy loader's top-level sentence_transformers/transformers imports moved into their functions (brief requires a cheap import; subprocess test added).
+- Task 8: minor (deferred): settings.embedding_dim not checked against the loaded model's dimension.
+- ENV: suite time rose from ~75 s to 130-190 s because an unrelated WSL process (RouteForge-scratch lr_timing.py, ~19 cores, load ~32) shares the CPU; test_env_isolation's child pytest takes 38 s under that load vs 5 s alone. Not caused by this branch.
+
+- Task 9: complete (commits 6e115b9..0fd6ef1; acceptance: 744 passed, ruff clean, 3 files in scope; controller read create_version: R5 current-only dedupe, reuse lookup under RLS, demotion, current_version_id switch all present)
+- Task 9: minor (deferred): INGEST_PASSAGES incremented before the caller commits (overcounts on rollback); duplicate result carries zero counts and previous_version_id None.
+
+- Task 10: complete (commits 0fd6ef1..197f11f; acceptance: 796 passed, ruff clean, 7 files in scope). ingest_upload handler and failure hook registered; worker builds Services with real embedder and reranker; drain() passes build_failure_handlers.
+- Task 10: minor (deferred): model loading in _run_worker is synchronous (blocks the loop at startup, before any job); the worker's 300 s job timeout also bounds ingest_upload (a 5,000-passage CPU embed should fit); intake requires timezone-aware effective_from.
