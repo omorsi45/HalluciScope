@@ -24,6 +24,10 @@ PROBABILITIES = [
     (0.60, 0.30, 0.10),
     (0.25, 0.25, 0.50),
 ]
+# One more row for the six-pair length tests, distinct from the five above.
+PROBABILITIES_6 = [*PROBABILITIES, (0.35, 0.45, 0.20)]
+# Premise word counts of the six-pair length tests: long and short premises interleaved.
+WORD_COUNTS = [1, 50, 2, 49, 3, 48]
 # Two head layouts. The first is the DeBERTa config's; the second differs in every column.
 LAYOUTS = [
     {"contradiction": 0, "entailment": 1, "neutral": 2},
@@ -46,8 +50,11 @@ class FakeTokenizer:
 class FakeModel:
     """Returns logits whose softmax is PROBABILITIES[pair], placed in the layout's columns."""
 
-    def __init__(self, layout: dict[str, int]) -> None:
+    def __init__(
+        self, layout: dict[str, int], probabilities: list[tuple[float, float, float]] | None = None
+    ) -> None:
         self.layout = layout
+        self.probabilities = PROBABILITIES if probabilities is None else probabilities
         self.config = SimpleNamespace(id2label={index: label for label, index in layout.items()})
         self.device: str | None = None
         self.eval_called = False
@@ -67,7 +74,7 @@ class FakeModel:
         self.inference_mode_flags.append(torch.is_inference_mode_enabled())
         rows = []
         for pair_id in input_ids[:, 0].tolist():
-            entail, contra, neutral = PROBABILITIES[pair_id]
+            entail, contra, neutral = self.probabilities[pair_id]
             row = [0.0, 0.0, 0.0]
             row[self.layout["entailment"]] = math.log(entail)
             row[self.layout["contradiction"]] = math.log(contra)
@@ -80,8 +87,20 @@ def _pairs(count: int) -> list[tuple[str, str]]:
     return [(f"premise-{i}", f"hypothesis-{i}") for i in range(count)]
 
 
-def _scorer(layout: dict[str, int], batch_size: int = 2):
-    tokenizer, model = FakeTokenizer(), FakeModel(layout)
+def _pairs_with_word_counts(word_counts: list[int]) -> list[tuple[str, str]]:
+    """Pair i has a premise of word_counts[i] words, ending in "premise-i" so the fake finds i."""
+    return [
+        (" ".join(["word"] * (count - 1) + [f"premise-{i}"]), f"hypothesis-{i}")
+        for i, count in enumerate(word_counts)
+    ]
+
+
+def _scorer(
+    layout: dict[str, int],
+    batch_size: int = 2,
+    probabilities: list[tuple[float, float, float]] | None = None,
+):
+    tokenizer, model = FakeTokenizer(), FakeModel(layout, probabilities)
     scorer = DebertaNLIScorer(
         tokenizer, model, model_id="fake-nli", device="cpu", batch_size=batch_size
     )
@@ -143,6 +162,31 @@ def test_scorer_passes_premise_first_and_hypothesis_second():
 
     assert tokenizer.calls[0]["premises"] == ["premise-0", "premise-1"]
     assert tokenizer.calls[0]["hypotheses"] == ["hypothesis-0", "hypothesis-1"]
+
+
+def test_batches_group_similar_lengths():
+    scorer, tokenizer, model = _scorer(LAYOUTS[0], batch_size=3, probabilities=PROBABILITIES_6)
+
+    scorer.score(_pairs_with_word_counts(WORD_COUNTS))
+
+    # Longest first: the three long premises share a batch, the three short ones the other,
+    # so neither batch pads a short premise out to a long one.
+    assert model.batch_sizes == [3, 3]
+    assert [[len(premise.split()) for premise in call["premises"]] for call in tokenizer.calls] == [
+        [50, 49, 48],
+        [3, 2, 1],
+    ]
+
+
+def test_sorted_batching_keeps_input_order():
+    scorer, _, _ = _scorer(LAYOUTS[0], batch_size=3, probabilities=PROBABILITIES_6)
+
+    results = scorer.score(_pairs_with_word_counts(WORD_COUNTS))
+
+    # The fake model's row depends on the pair, so a result left in batch order is visible.
+    assert len(results) == 6
+    for result, expected in zip(results, PROBABILITIES_6, strict=True):
+        assert _as_tuple(result) == pytest.approx(expected, abs=1e-5)
 
 
 def test_premise_only_truncation():

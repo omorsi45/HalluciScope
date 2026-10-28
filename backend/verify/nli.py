@@ -51,15 +51,23 @@ class DebertaNLIScorer:
         self.model_id = model_id
 
     def score(self, pairs: Sequence[tuple[str, str]]) -> list[NLIResult]:
-        """Score (premise, hypothesis) pairs in input order, `batch_size` at a time."""
+        """Score (premise, hypothesis) pairs, `batch_size` at a time; results in input order.
+
+        Pairs are batched longest first (by characters, a cheap proxy for token count; stable on
+        ties) so a batch pads to similar lengths instead of to its one longest pair.
+        """
         if len(pairs) == 0:
             return []
         import torch
 
-        results: list[NLIResult] = []
+        order = sorted(
+            range(len(pairs)), key=lambda i: len(pairs[i][0]) + len(pairs[i][1]), reverse=True
+        )
+        scored: dict[int, NLIResult] = {}
         with torch.inference_mode():
-            for start in range(0, len(pairs), self._batch_size):
-                batch = pairs[start : start + self._batch_size]
+            for start in range(0, len(order), self._batch_size):
+                indices = order[start : start + self._batch_size]
+                batch = [pairs[i] for i in indices]
                 encoded = self._tokenizer(
                     [premise for premise, _ in batch],
                     [hypothesis for _, hypothesis in batch],
@@ -72,12 +80,10 @@ class DebertaNLIScorer:
                 inputs = {name: tensor.to(self._device) for name, tensor in encoded.items()}
                 logits = self._model(**inputs).logits
                 rows = logits.float().softmax(dim=-1).cpu().tolist()
-                results.extend(
-                    NLIResult(
+                for index, row in zip(indices, rows, strict=True):
+                    scored[index] = NLIResult(
                         entail=row[self._columns["entailment"]],
                         contra=row[self._columns["contradiction"]],
                         neutral=row[self._columns["neutral"]],
                     )
-                    for row in rows
-                )
-        return results
+        return [scored[i] for i in range(len(pairs))]
