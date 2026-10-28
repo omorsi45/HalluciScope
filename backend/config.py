@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 20_971_520
     parse_timeout_s: float = 60.0
 
+    # Search: how long POST /search waits for a reranked result computed by the worker
+    search_wait_s: float = 15.0
+
     # Chunking
     chunk_size: int = 512
     chunk_overlap: int = 50

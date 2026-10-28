@@ -45,6 +45,7 @@ def patched(monkeypatch):
     monkeypatch.setattr(startup, "Database", _FakeDb)
     monkeypatch.setattr(startup, "Repository", _FakeRepo)
     monkeypatch.setattr(startup, "configure_logging", lambda level: None)
+    monkeypatch.setattr(startup, "load_embedder", lambda settings: object())
     monkeypatch.setattr(startup, "get_embedding_model", lambda: object())
     monkeypatch.setattr(startup, "get_nli_model", lambda: (object(), object()))
     monkeypatch.setattr(startup, "Chunker", lambda **kw: object())
@@ -62,6 +63,33 @@ async def test_startup_failure_after_db_open_closes_pool(patched, monkeypatch):
     monkeypatch.setattr(startup, "get_embedding_model", boom)
     app = startup.create_configured_app()
     with pytest.raises(RuntimeError):
+        async with app.router.lifespan_context(app):
+            pass
+    assert _FakeDb.instances[0].closed is True
+
+
+async def test_startup_loads_the_search_embedder(patched, monkeypatch):
+    embedder = object()
+    loads = []
+
+    def load(settings):
+        loads.append(settings)
+        return embedder
+
+    monkeypatch.setattr(startup, "load_embedder", load)
+    app = startup.create_configured_app()
+    async with app.router.lifespan_context(app):
+        assert app.state.embedder is embedder
+    assert loads == [app.state.settings]
+
+
+async def test_embedder_load_failure_closes_pool(patched, monkeypatch):
+    def boom(settings):
+        raise OSError("model files missing")
+
+    monkeypatch.setattr(startup, "load_embedder", boom)
+    app = startup.create_configured_app()
+    with pytest.raises(OSError):
         async with app.router.lifespan_context(app):
             pass
     assert _FakeDb.instances[0].closed is True

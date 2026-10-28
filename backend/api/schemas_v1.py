@@ -4,7 +4,9 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, BaseModel, Field, StringConstraints
+from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
+
+from backend.retrieval.types import SearchMode
 
 _SURROGATES = range(0xD800, 0xE000)
 
@@ -39,6 +41,12 @@ Description = Annotated[str, StringConstraints(max_length=1000), _NO_SURROGATES]
 Title = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+    _NO_SURROGATES,
+    _NO_NUL,
+]
+SearchQuery = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
     _NO_SURROGATES,
     _NO_NUL,
 ]
@@ -240,3 +248,40 @@ class DiffOut(BaseModel):
     to_version: int
     hunks: list[DiffHunkOut]
     stats: dict[str, int]  # hunk counts per op
+
+
+class SearchIn(BaseModel):
+    query: SearchQuery
+    collection_ids: list[UUID] | None = None
+    as_of: AwareDatetime | None = None
+    k: int = Field(default=10, ge=1, le=50)
+    mode: SearchMode = "hybrid"
+    rerank: bool = False
+
+
+class PassageHitOut(BaseModel):
+    """One ranked passage; mirrors ``backend.retrieval.types.PassageHit``."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    passage_id: UUID
+    document_id: UUID
+    version_id: UUID
+    version_number: int
+    effective_from: datetime
+    document_title: str
+    text: str
+    start_char: int
+    end_char: int
+    page_start: int | None
+    page_end: int | None
+    section: str | None
+    scores: dict[str, float]  # keys among 'bm25', 'dense', 'fts', 'rrf', 'rerank'
+    rank: int
+
+
+class SearchOut(BaseModel):
+    hits: list[PassageHitOut]
+    mode: str
+    reranked: bool
+    took_ms: int

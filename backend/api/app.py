@@ -16,6 +16,7 @@ from backend.api.routes.documents import router as documents_router
 from backend.api.routes.feedback import router as feedback_router
 from backend.api.routes.health import router as health_router
 from backend.api.routes.members import router as members_router
+from backend.api.routes.search import router as search_router
 from backend.config import Settings
 
 
@@ -59,6 +60,7 @@ def create_app(settings: Settings | None = None, lifespan=None) -> FastAPI:
     v1.include_router(api_keys_router, prefix="/api-keys")
     v1.include_router(collections_router, prefix="/collections")
     v1.include_router(documents_router)
+    v1.include_router(search_router)
     v1.include_router(members_router, prefix="/tenants/current")
     app.include_router(v1, prefix="/api/v1")
 

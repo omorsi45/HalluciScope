@@ -83,16 +83,17 @@ async def _noop(ctx: JobContext):
     return None
 
 
-def test_registries_register_the_ingest_upload_job_and_its_failure_hook():
-    assert set(build_handlers(None)) == {"ingest_upload"}
-    assert set(build_failure_handlers(None)) == {"ingest_upload"}
+def test_registries_register_the_ingest_and_search_jobs_with_their_failure_hooks():
+    assert set(build_handlers(None)) == {"ingest_upload", "search"}
+    assert set(build_failure_handlers(None)) == {"ingest_upload", "search"}
 
 
 def test_worker_import_paths_do_not_load_ml_libraries():
     # The worker and API import these modules; only calling a model loader may load torch.
     code = (
         "import json, sys; import backend.cli.main, backend.jobs.registry, "
-        "backend.ingest.handlers, backend.ingest.intake; "
+        "backend.ingest.handlers, backend.ingest.intake, backend.retrieval.handlers, "
+        "backend.api.app, backend.api.routes.search; "
         "print(json.dumps([m for m in ('torch', 'sentence_transformers', 'transformers') "
         "if m in sys.modules]))"
     )

@@ -14,7 +14,7 @@ from backend.core.verifiers.nli import NLIVerifier
 from backend.core.verifiers.similarity import SimilarityVerifier
 from backend.db.pool import Database
 from backend.db.repository import Repository
-from backend.models.loader import get_embedding_model, get_nli_model
+from backend.models.loader import get_embedding_model, get_nli_model, load_embedder
 from backend.obs.logging import configure_logging
 
 
@@ -42,6 +42,8 @@ def create_configured_app() -> FastAPI:
         try:
             app.state.db = db
             app.state.auth = AuthService(db, settings)
+            # R7: the API process loads only the embedder; the reranker lives in the worker.
+            app.state.embedder = load_embedder(settings)
             http_client = httpx.AsyncClient(timeout=120.0)
             embedding_model = get_embedding_model()
             tokenizer, nli_model = get_nli_model()
