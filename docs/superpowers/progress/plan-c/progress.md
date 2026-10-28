@@ -103,3 +103,15 @@ Rulings:
 
 - Task 20: complete (commits e424e8f..95951b3; acceptance: 1462 passed, ruff clean, 3 files in scope). Bootstrap draws from np.unique(groups) (sorted), so intervals do not depend on row order.
 - ENV: full suite 250-370 s; other WSL workloads (a kind Kubernetes cluster and Go race tests from other projects) share the CPU; test_env_isolation's child pytest takes up to 93 s. Inner limit 900 s still has margin.
+
+- Task 21: complete (commits 95951b3..14fd1d6; acceptance: 1507 passed, ruff clean, 2 files in scope). Real-data role populations (counts only): fit 1,724 sources, select 400, risk 391, test 450 (150 per task type); 17,790 responses; 0 span text mismatches; gold units supported 117,078, contradicted 5,133, insufficient 8,816. Manifest is produced in Task 27 after throughput sizing.
+
+- Task 22: complete (commits 14fd1d6..9ce33be; acceptance: 1549 passed, ruff clean, 3 files in scope). Real-model measure (passage mode, under contention from other WSL workloads): 0.589 units/s, 2.24 NLI pairs/s, about 75 s per source; NLI is 94% of the time. The ragtruth-bench tenant in evidencegraph_bench holds 31 sources from the smoke run (reused by Task 27).
+- COMPUTE FINDING for Task 27: plan_sizes floors (fit 200, select 150, risk 150, test 150 = 650 sources) cost about 13.5 h at the measured speed versus the planned 4 h budget; full data would be about 62 h. No CUDA GPU (AMD Radeon RX 9060 XT; torch here is the CPU build). Options before Task 27: re-measure on an idle machine; length-sorted NLI batching (numerically equivalent, less padding); then run at the floors with a larger budget and state the scale next to every number (within Omar's "sized to his hardware" agreement). Changing the NLI model to base or dropping fp32 would change spec calls and needs Omar. Decide at Task 27.
+- .local/run.py: stdout now uses errors="replace" (it crashed printing non-cp1252 log text).
+
+- Task 23: complete (commits 9ce33be..f955150; acceptance: 1570 passed, ruff clean, 3 files in scope). Test-role rows are dropped before loading; a spy test fails on any test-role cache read.
+- Task 23: carry-forward to Task 27: run train_calibrator through .local/wsl-git.sh so metadata.git_commit is recorded; with few risk sources the fixed sequence can abstain (tau_s None or a vacuous 0.95), which is the honest LTT outcome and must be reported, not tuned away.
+
+- Task 24: attempt 1 interrupted by the session before any code (notes only). Attempt 2 complete (commits f955150..79ae886; acceptance: 1602 passed, ruff clean, 3 files in scope). Runner adds --database-url and --data-root (atomic subset); refuses an artifact whose manifest_hash or models differ from the cache.
+- Task 24: carry-forward to Task 27: run run_factuality through .local/wsl-git.sh so git_commit is recorded; real-scale bootstrap time unmeasured; evaluation/AGENTS.md command list to update in Plan D docs.
