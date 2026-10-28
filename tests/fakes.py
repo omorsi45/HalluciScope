@@ -1,4 +1,4 @@
-"""Deterministic stand-ins for the embedding and reranking models, and a scripted LLM.
+"""Deterministic stand-ins for the embedding, reranking and NLI models, and a scripted LLM.
 
 The embedding and reranking fakes do not use Python's `hash`, which is randomized per
 process, so vectors and scores are identical across runs and across processes.
@@ -11,7 +11,11 @@ from typing import Any
 
 import numpy as np
 
+from backend.verify.claims import STOPWORDS
+from backend.verify.types import NLIResult
+
 _TOKEN = re.compile(r"\w+")
+_NUMBER = re.compile(r"\d+")
 
 
 def _tokens(text: str) -> list[str]:
@@ -59,6 +63,47 @@ class KeywordReranker:
         query_tokens = set(_tokens(query))
         return [float(len(query_tokens & set(_tokens(passage)))) for passage in passages]
 
+
+class RuleNLIScorer:
+    """NLI from word overlap and numbers, so verification tests need no model.
+
+    Content tokens are the lowercase word tokens (letters, digits, underscore) outside
+    `STOPWORDS`; numbers are the tokens made of digits. For a (premise, hypothesis) pair:
+    - contradiction: the hypothesis has numbers, none of them occur in the premise, the
+      premise has numbers, and every non-number content token of the hypothesis occurs in the
+      premise (the same statement with other figures);
+    - entailment: every content token of the hypothesis occurs in the premise;
+    - neutral: anything else.
+    The chosen class gets 0.9 and each of the others 0.05.
+    """
+
+    model_id = "fake-rule-nli"
+
+    def score(self, pairs: Sequence[tuple[str, str]]) -> list[NLIResult]:
+        return [self._score_pair(premise, hypothesis) for premise, hypothesis in pairs]
+
+    @staticmethod
+    def _score_pair(premise: str, hypothesis: str) -> NLIResult:
+        premise_tokens = _content_tokens(premise)
+        hypothesis_tokens = _content_tokens(hypothesis)
+        premise_numbers = {token for token in premise_tokens if _NUMBER.fullmatch(token)}
+        hypothesis_numbers = {token for token in hypothesis_tokens if _NUMBER.fullmatch(token)}
+        hypothesis_words = hypothesis_tokens - hypothesis_numbers
+
+        if (
+            hypothesis_numbers
+            and not hypothesis_numbers & premise_numbers
+            and premise_numbers
+            and hypothesis_words <= premise_tokens
+        ):
+            return NLIResult(entail=0.05, contra=0.9, neutral=0.05)
+        if hypothesis_tokens <= premise_tokens:
+            return NLIResult(entail=0.9, contra=0.05, neutral=0.05)
+        return NLIResult(entail=0.05, contra=0.05, neutral=0.9)
+
+
+def _content_tokens(text: str) -> set[str]:
+    return {token for token in _tokens(text) if token not in STOPWORDS}
 
 
 class ScriptedLLM:

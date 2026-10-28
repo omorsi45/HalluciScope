@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from backend.config import Settings
+from backend.verify.nli import DebertaNLIScorer
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -128,4 +129,18 @@ def load_reranker(settings: Settings) -> CrossEncoderReranker:
         settings.reranker_model,
         device=resolve_device(settings.model_device),
         batch_size=settings.embed_batch_size,
+    )
+
+
+def load_nli(settings: Settings) -> DebertaNLIScorer:
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    tokenizer = AutoTokenizer.from_pretrained(settings.nli_model)
+    model = AutoModelForSequenceClassification.from_pretrained(settings.nli_model)
+    return DebertaNLIScorer(
+        tokenizer,
+        model,
+        model_id=settings.nli_model,
+        device=resolve_device(settings.model_device),
+        batch_size=settings.nli_batch_size,
     )

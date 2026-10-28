@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     model_device: str = "auto"
     embed_batch_size: int = 32
 
+    # EvidenceGraph NLI scorer (the legacy pipeline keeps nli_model_name)
+    nli_model: str = "cross-encoder/nli-deberta-v3-large"
+    nli_batch_size: int = 16
+
     # Ingestion limits
     max_upload_bytes: int = 20_971_520
     parse_timeout_s: float = 60.0
