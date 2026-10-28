@@ -1,42 +1,12 @@
 from collections.abc import Sequence
-from functools import lru_cache
-from typing import TYPE_CHECKING
 
 import numpy as np
 
 from backend.config import Settings
 from backend.verify.nli import DebertaNLIScorer
 
-if TYPE_CHECKING:
-    from sentence_transformers import SentenceTransformer
-
-
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    return Settings()
-
-
-@lru_cache(maxsize=1)
-def get_embedding_model() -> "SentenceTransformer":
-    from sentence_transformers import SentenceTransformer
-
-    settings = get_settings()
-    return SentenceTransformer(settings.embedding_model_name)
-
-
-@lru_cache(maxsize=1)
-def get_nli_model():
-    from transformers import AutoModelForSequenceClassification, AutoTokenizer
-
-    settings = get_settings()
-    tokenizer = AutoTokenizer.from_pretrained(settings.nli_model_name)
-    model = AutoModelForSequenceClassification.from_pretrained(settings.nli_model_name)
-    model.eval()
-    return tokenizer, model
-
-
-# EvidenceGraph retrieval adapters. torch and sentence-transformers are imported inside the
-# functions and classes below, so the new code adds nothing to import time.
+# Model adapters. torch and sentence-transformers are imported inside the functions and classes
+# below, so importing this module loads no ML library.
 
 BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 

@@ -136,8 +136,13 @@ def test_settings_model_defaults():
     assert settings.max_upload_bytes == 20_971_520
     assert settings.parse_timeout_s == 60.0
     assert settings.embed_batch_size == 32
-    # The legacy pipeline keeps its own embedding model.
-    assert settings.embedding_model_name == "sentence-transformers/all-MiniLM-L6-v2"
+
+
+def test_legacy_loaders_removed():
+    from backend.models import loader
+
+    legacy = ("get_embedding_model", "get_nli_model")
+    assert [name for name in legacy if hasattr(loader, name)] == []
 
 
 @pytest.mark.models

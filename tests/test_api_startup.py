@@ -75,15 +75,6 @@ async def test_embedder_load_failure_closes_pool(patched, monkeypatch):
     assert _FakeDb.instances[0].closed is True
 
 
-async def test_startup_opens_no_sqlite_database(patched, monkeypatch, tmp_path):
-    legacy = tmp_path / "legacy.db"
-    monkeypatch.setenv("HALLUCISCOPE_DB_PATH", str(legacy))
-    app = startup.create_configured_app()
-    async with app.router.lifespan_context(app):
-        pass
-    assert not legacy.exists()
-
-
 async def test_shutdown_closes_the_http_client_and_the_database(patched):
     app = startup.create_configured_app()
     async with app.router.lifespan_context(app):

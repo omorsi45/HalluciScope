@@ -25,46 +25,6 @@ CLI_TENANT_NAME = "cli"
 _LOCKED_PASSWORD_HASH = "!"
 
 
-def _build_pipeline():
-    """Build the full pipeline with real dependencies. Mocked in tests."""
-    from backend.core.chunker import Chunker
-    from backend.core.ensemble import EnsembleScorer
-    from backend.core.pipeline import Pipeline
-    from backend.core.verifiers.consistency import ConsistencyVerifier
-    from backend.core.verifiers.nli import NLIVerifier
-    from backend.core.verifiers.similarity import SimilarityVerifier
-    from backend.models.loader import get_embedding_model, get_nli_model
-
-    settings = Settings()
-    embedding_model = get_embedding_model()
-    tokenizer, nli_model = get_nli_model()
-
-    return Pipeline(
-        settings=settings,
-        chunker=Chunker(
-            embedding_model=embedding_model,
-            chunk_size=settings.chunk_size,
-            chunk_overlap=settings.chunk_overlap,
-            top_k=settings.top_k_chunks,
-        ),
-        nli_verifier=NLIVerifier(tokenizer=tokenizer, model=nli_model),
-        similarity_verifier=SimilarityVerifier(embedding_model=embedding_model),
-        consistency_verifier=ConsistencyVerifier(
-            embedding_model=embedding_model,
-            base_url=settings.ollama_base_url,
-            model=settings.ollama_model,
-            n_samples=settings.consistency_samples,
-            temperature=settings.consistency_temperature,
-            similarity_threshold=settings.consistency_similarity_threshold,
-        ),
-        ensemble=EnsembleScorer(
-            nli_weight=settings.nli_weight,
-            consistency_weight=settings.consistency_weight,
-            similarity_weight=settings.similarity_weight,
-        ),
-    )
-
-
 VERDICT_COLORS = {"supported": "green", "insufficient": "yellow", "contradicted": "red"}
 
 
@@ -312,21 +272,6 @@ def worker():
         typer.echo("worker_concurrency must be at least 1", err=True)
         raise typer.Exit(2)
     asyncio.run(_run_worker(settings))
-
-
-@app.command()
-def evaluate(
-    dataset: str = typer.Option(..., help="Dataset name (halueval, custom, adversarial)"),
-    output: Path = typer.Option(Path("evaluation/results"), help="Output directory"),
-    ablation: bool = typer.Option(False, help="Run ablation study"),
-):
-    """Run evaluation benchmark on a dataset."""
-    if ablation:
-        from evaluation.ablation import run_ablation
-        asyncio.run(run_ablation(dataset=dataset, output_dir=str(output)))
-    else:
-        from evaluation.benchmarks import run_benchmark
-        asyncio.run(run_benchmark(dataset=dataset, output_dir=str(output)))
 
 
 if __name__ == "__main__":

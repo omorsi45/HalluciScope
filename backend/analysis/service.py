@@ -8,6 +8,8 @@ them and verifies the answer; a verify analysis verifies the stored answer. A qu
 first ingests its own upload inline (`process_upload`), then runs like an ask over that one
 hidden collection. Verdicts come only from the NLI features and the calibrator
 (`VerificationEngine`); the LLM writes the answer and splits it into claims, nothing more.
+An ask analysis may also resample its answer (`options.consistency_samples`) for a diagnostic
+stored beside each claim; it runs inside the verifying stage and never changes a verdict.
 Every failure is reduced to a stable error code: exception messages and text never reach a log
 line or a row.
 """
@@ -18,7 +20,7 @@ import time
 from collections import Counter
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
@@ -41,8 +43,9 @@ from backend.obs.logging import bind, request_id_var
 from backend.retrieval.types import PassageHit, SearchMode, SearchScope
 from backend.services import Services
 from backend.verify.claims import llm_atomic_claims, sentence_claims
+from backend.verify.consistency import consistency_diagnostic
 from backend.verify.engine import VerificationEngine
-from backend.verify.types import Claim
+from backend.verify.types import Claim, ClaimVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -230,6 +233,28 @@ async def _extract_claims(
     return await llm_atomic_claims(llm, answer)
 
 
+async def _with_consistency(
+    services: Services,
+    question: str,
+    context: Sequence[PassageHit],
+    verdicts: Sequence[ClaimVerdict],
+    n_samples: int,
+) -> list[ClaimVerdict]:
+    """The verdicts with the self-consistency diagnostic added; nothing else changes."""
+    entries = await consistency_diagnostic(
+        services.llm,
+        services.embedder,
+        question,
+        context,
+        [verdict.claim for verdict in verdicts],
+        n_samples=n_samples,
+    )
+    return [
+        replace(verdict, diagnostics={**verdict.diagnostics, "consistency": entry})
+        for verdict, entry in zip(verdicts, entries, strict=True)
+    ]
+
+
 async def _ingest_quick_upload(
     services: Services, tenant_id: UUID, analysis: Mapping[str, Any]
 ) -> None:
@@ -297,6 +322,11 @@ async def _execute(services: Services, tenant_id: UUID, analysis: Mapping[str, A
         claims = await _extract_claims(services.llm, answer, analysis["options"])
     async with stages.enter("verifying"):
         verdicts = await engine.verify(claims, scope, _pinned(claims, context))
+        samples = analysis["options"].get("consistency_samples", 0)
+        if analysis["kind"] == "ask" and samples > 0:
+            verdicts = await _with_consistency(
+                services, analysis["question"], context, verdicts, samples
+            )
 
     async with stages.enter("persisting"):
         citations = resolve_citations(refs, context)
