@@ -35,6 +35,17 @@ class NLIResult:
     neutral: float
 
 
+@dataclass(frozen=True)
+class EvidenceSignal:
+    """One retrieved passage scored against a claim."""
+
+    passage_id: str
+    text: str
+    nli: NLIResult
+    rerank: float | None  # cross-encoder score; None when the passage was not reranked
+    dense_cos: float  # cosine similarity between claim and passage embeddings
+
+
 class NLIScorer(Protocol):
     model_id: str
 
