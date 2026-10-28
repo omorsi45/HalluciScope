@@ -67,3 +67,15 @@ Rulings:
 
 - Task 10: complete (commits cb56d07..b4a4b58; acceptance: 1266 passed, ruff clean, 2 files in scope). relation_for ties resolve to contradicts (spec: supports needs entail above contra).
 - Task 10: carry-forward to Tasks 11 and 13: gather_evidence uses asyncio.gather without cancelling siblings; a retrieval exception propagates raw (run_analysis maps it).
+
+- Task 11: complete (commits b4a4b58..0461788; acceptance: 1280 passed, ruff clean, 3 files in scope). collect makes one NLI call; verify adds one batched localization call.
+- Task 11: minor (deferred): when the best-entail and best-contra item is the same passage, the contra window wins its span.
+
+- Task 12: complete (commits 0461788..c4c02e8; acceptance: 1312 passed, ruff clean, 5 files in scope, 0004 is LF, migrate applied [4]). R-C1 composite FKs and R-C3 CitationRecord applied; cross-tenant FK test present.
+- Task 12: carry-forward: get_citations returns citation columns only (Task 14 must join for collection_id and titles); set_status does not guard terminal states (failure hook must check); span-inside-passage is checked in code/tests, not the DB.
+
+- Task 13: attempt 1 cancelled by the 3600 s idle deadline (no commit, no report). Left uncommitted RED-phase edits: tests/test_run_analysis.py (24 tests, new), tests/test_worker.py (harness fakes for load_nli, OllamaClient, timeouts_s), tests/pg_fixtures.py (services fixture with ScriptedLLM, RuleNLIScorer, make_test_calibrator). No production code, no stray process in WSL afterwards. Cause unknown (likely one unbounded command or a stalled turn). Re-dispatching fresh: keep the partial tests for review, every command bounded at the Windows level with .local/run.py, report file written early.
+
+- Task 13: attempt 1 root cause (found by attempt 2): the test harness FakeWorker.run waited on stop.wait() forever, so in RED the CLI worker tests hung with no SIGINT. Fixed with a bounded wait (10 s).
+- Task 13: attempt 2 implemented and reached GREEN on focused tests (31 + 16), then the session was interrupted before the full suite and commit. ENV: the eg-pg container exited 255 during the controller's first full run (Docker VM restart, not OOM); restarted, orphan eg_test db dropped. Controller acceptance: 1349 passed, ruff clean, LF, no em dashes; read the error mapping (timeout, LLMFailure, mismatch, retrieval_failed, internal_error) and confirmed the JSON formatter logs only exc_type and frames. Committed by the controller as 05433e5 (9 files in scope).
+- Task 13: complete (commits c4c02e8..05433e5). Decisions in the report: known_at from the database clock; _GuardedRetriever maps any retrieval exception to retrieval_failed; engine built before any LLM call so calibrator_mismatch fails fast; worker validates the artifact before loading models and exits 1 naming the field.
