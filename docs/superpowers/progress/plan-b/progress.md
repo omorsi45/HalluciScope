@@ -80,3 +80,20 @@ Rulings:
 
 - Task 10: complete (commits 0fd6ef1..197f11f; acceptance: 796 passed, ruff clean, 7 files in scope). ingest_upload handler and failure hook registered; worker builds Services with real embedder and reranker; drain() passes build_failure_handlers.
 - Task 10: minor (deferred): model loading in _run_worker is synchronous (blocks the loop at startup, before any job); the worker's 300 s job timeout also bounds ingest_upload (a 5,000-passage CPU embed should fit); intake requires timezone-aware effective_from.
+
+- Ruling: a collection that ever held a document cannot be deleted (409 collection_not_empty, also after its documents are soft-deleted). Why: spec 8 keeps soft-deleted documents' versions and passages so past analyses keep resolvable provenance, and hard purge is out of scope; the plan's "succeeds after the document is deleted" contradicts that. The FK violation maps to 409. Cost if wrong: users cannot remove such collections until an archive flag or purge design exists; document it in Plan D limitations.
+- Task 11: complete (commits 197f11f..1d04692; acceptance: 818 passed, ruff clean, 6 files in scope)
+- Task 11: IMPORTANT (parked for final fix wave): shared request string types other than the new Title (Name, Description, others from Plan A) accept NUL and the insert then returns 500. Fix: reject NUL in the shared surrogate validator in schemas_v1 and add a test.
+- Task 11: minor (deferred): one unreproduced flaky run of the document listing-order test (test now compares with the DB's own created_at desc, id desc order).
+
+- Task 12: complete (commits 1d04692..e7077ab; diff + route, 39 tests)
+- Task 12: acceptance FAILED twice (intermittent, different test_diff route tests; second upload failed). Root cause (controller, verified): intake defaults effective_from to Python now(); create_version rejects an earlier effective_from than the current version's; the WSL wall clock stepped backwards (probe: 2 steps in 90 s, up to 3.14 s). The same failure is reachable in production with no clock step: v1 uploaded with effective_from up to 60 s in the future, then v2 with no date. Fix commit a57dbb2 (fix: default effective_from to no earlier than the current version): default = max(now, current.effective_from) for new versions; deterministic regression test RED then GREEN. Acceptance after fix: 858 passed, ruff clean.
+- Task 12: minor (deferred): diff has no size or time cap on the quadratic worst case or on huge replace hunks.
+
+- Task 13: complete (commits a57dbb2..d0f506c; acceptance: 868 passed, ruff clean, 6 files in scope; controller read the BM25 SQL and visible-set SQL: stats over vis only, float8 throughout, R9 known/valid conditions present). Test timestamps come from Postgres, not Python.
+
+- Task 14: complete (commits d0f506c..74380f7; acceptance: 878 passed, ruff clean, 3 files in scope). ef_search clamped to 1000 (pgvector cap). Tests force the HNSW path on small tables (enable_seqscan off).
+- Task 14: carry-forward to Task 16: dense_search's SET LOCAL (ef_search, iterative_scan, and in exact mode enable_indexscan/bitmapscan off) persist for the rest of the transaction; the retriever must run BM25 and FTS before dense in the same transaction.
+- Task 14: minor (deferred): HNSW can leave outlier vectors unreachable even with iterative scan (exact mode is the fallback; benchmark reports dense vs dense_exact).
+
+- Task 15: complete (commits 74380f7..239e120; acceptance: 887 passed, ruff clean, 3 files in scope)
