@@ -54,3 +54,16 @@ Rulings:
 
 - Task 5: complete (commits ea282c9..8beabf4; acceptance: 1137 passed, ruff clean, 3 files in scope)
 - Task 5: minor (deferred): empty inputs give NaN/ZeroDivision in ECE and AURC (callers never pass empty splits; guard if touched).
+
+- Task 6: complete (commits 8beabf4..de77137; acceptance: 1145 passed, ruff clean, 3 files in scope). Fit converges in 8 iterations on the recovery test; test chooses balanced W_true/b_true (the plan fixes no values).
+- Task 6: minor (deferred): fit_temperature on perfectly separable large-margin logits has a flat NLL so the returned T is arbitrary within bounds (real logits come from an l2 = 1.0 fit).
+
+- Task 7: complete (commits de77137..6eb93a3; acceptance: 1166 passed, ruff clean, 2 files in scope). LTT simulation 0/200 violations (limit 0.08) with a non-vacuous scenario; plug-in mutant gave 48/200. accept_mask restricts only the numerator; denominator = all bad rows of the source (matches spec R1's L_i for CONTRADICTED).
+
+- Task 8: complete (commits 6eb93a3..7306d32; acceptance: 1175 passed, ruff clean, 3 files in scope)
+
+- Task 9: complete (commits 7306d32..cb56d07; acceptance: 1247 passed, ruff clean, 4 files in scope)
+- Task 9: carry-forward to Task 13 (worker load): Calibrator.load lets FileNotFoundError and json.JSONDecodeError propagate; the worker must treat them like CalibratorError. predict_proba needs an (n, 12) matrix. Compare calibrators via to_dict().
+
+- Task 10: complete (commits cb56d07..b4a4b58; acceptance: 1266 passed, ruff clean, 2 files in scope). relation_for ties resolve to contradicts (spec: supports needs entail above contra).
+- Task 10: carry-forward to Tasks 11 and 13: gather_evidence uses asyncio.gather without cancelling siblings; a retrieval exception propagates raw (run_analysis maps it).
