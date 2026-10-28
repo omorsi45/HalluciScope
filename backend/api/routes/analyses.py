@@ -35,6 +35,7 @@ from backend.api.schemas_v1 import (
     FeedbackOut,
     GraphOut,
     NLIOut,
+    ReverifyAcceptedOut,
     VerifyIn,
 )
 from backend.auth.deps import current_principal, get_db
@@ -42,11 +43,14 @@ from backend.auth.service import Principal
 from backend.authz.policy import is_tenant_admin, readable_subset, require_analysis
 from backend.db.pool import Database
 from backend.db.repos import analyses
+from backend.jobs.queue import enqueue
+from backend.obs.logging import request_id_var
 from backend.provenance.graph import build_graph, passage_collection_ids
 
 router = APIRouter()
 
 QUESTION_PREVIEW_CHARS = 200
+REVERIFY_PRIORITY = 5
 
 
 @router.post("/ask", response_model=AnalysisAcceptedOut, status_code=202)
@@ -171,6 +175,43 @@ async def get_analysis(
             for citation in citations
         ],
     )
+
+
+@router.post(
+    "/analyses/{analysis_id}/reverify", response_model=ReverifyAcceptedOut, status_code=202
+)
+async def reverify_analysis(
+    analysis_id: UUID,
+    principal: Principal = Depends(current_principal),
+    db: Database = Depends(get_db),
+) -> ReverifyAcceptedOut:
+    """Queue a re-verification of every claim of a finished live analysis."""
+    async with db.tenant_tx(principal.tenant_id) as conn:
+        # The creator or a tenant owner/admin (R8); anyone else gets the same 404.
+        row = await require_analysis(conn, principal, analysis_id)
+        if row["as_of"] is not None:
+            raise ApiError(
+                409,
+                "not_live",
+                "Analysis is not live",
+                "An as-of analysis is pinned to the documents known at its time.",
+            )
+        if row["status"] != "succeeded":
+            raise ApiError(
+                409,
+                "not_finished",
+                "Analysis has not finished",
+                "Wait for the analysis to succeed before re-verifying it.",
+            )
+        await enqueue(
+            conn,
+            "reverify_analysis",
+            {"analysis_id": str(analysis_id)},
+            tenant_id=principal.tenant_id,
+            priority=REVERIFY_PRIORITY,
+            request_id=request_id_var.get(),
+        )
+    return ReverifyAcceptedOut(status="queued")
 
 
 @router.get("/analyses/{analysis_id}/graph", response_model=GraphOut)

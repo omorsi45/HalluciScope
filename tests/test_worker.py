@@ -84,8 +84,8 @@ async def _noop(ctx: JobContext):
     return None
 
 
-def test_registries_register_the_ingest_search_and_analysis_jobs_with_their_failure_hooks():
-    kinds = {"ingest_upload", "search", "run_analysis"}
+def test_registries_register_every_job_kind_with_its_failure_hook():
+    kinds = {"ingest_upload", "search", "run_analysis", "reverify_document", "reverify_analysis"}
     assert set(build_handlers(None)) == kinds
     assert set(build_failure_handlers(None)) == kinds
 

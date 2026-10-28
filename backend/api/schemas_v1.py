@@ -378,6 +378,10 @@ class AnalysisAcceptedOut(BaseModel):
     status: str
 
 
+class ReverifyAcceptedOut(BaseModel):
+    status: Literal["queued"]
+
+
 class AnalysisSummaryOut(BaseModel):
     id: UUID
     kind: str

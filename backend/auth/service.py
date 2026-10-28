@@ -62,7 +62,9 @@ class Principal:
     display_name: str
     tenant_id: UUID
     role: Role
-    auth: Literal["session", "api_key"]
+    # "system" is for in-process callers (the CLI, background jobs); HTTP authentication
+    # never produces it.
+    auth: Literal["session", "api_key", "system"]
     session_id: UUID | None = None
     csrf_hash: bytes | None = None
     api_key_id: UUID | None = None
@@ -80,6 +82,29 @@ def _normalize_email(email: str) -> str:
     if not _EMAIL_RE.fullmatch(normalized):
         raise AuthError("invalid_email", 422)
     return normalized
+
+
+async def principal_for_user(db: Database, tenant_id: UUID, user_id: UUID) -> Principal | None:
+    """The user's principal in the tenant as of now, for work done on their behalf.
+
+    None when the user does not exist, is disabled, or is no longer a member of the tenant.
+    The role is the current membership's, so a demotion takes effect immediately.
+    """
+    async with db.system_tx() as conn:
+        user = await users.get_user(conn, user_id)
+        if user is None or user["disabled_at"] is not None:
+            return None
+        membership = await tenants.get_membership(conn, tenant_id, user_id)
+    if membership is None:
+        return None
+    return Principal(
+        user_id=user["id"],
+        email=user["email"],
+        display_name=user["display_name"],
+        tenant_id=tenant_id,
+        role=membership["role"],
+        auth="system",
+    )
 
 
 def _require_session(principal: Principal) -> None:

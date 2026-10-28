@@ -297,7 +297,8 @@ async def test_new_version_enqueues_reverify(db, services, world):
     assert await jobs(db, "reverify_document") == []
 
     second = await upload(db, world.owner, V2, document_id=first.document_id)
-    assert await drain(db, services) == 1
+    # Only the ingestion runs: this test is about the job it queues, not about running it.
+    assert await drain(db, services, kinds=("ingest_upload",)) == 1
 
     versions = await fetch(
         db,
