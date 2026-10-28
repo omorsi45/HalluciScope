@@ -6,9 +6,12 @@
         --ablations evaluation/results/factuality_test_ablations.json \
         --atomic evaluation/results/factuality_test_atomic.json \
         --out docs/results/factuality.md --figures docs/results/figures
+    python -m evaluation.report temporal evaluation/results/temporal.json \
+        --out docs/results/temporal.md
 
-Every number in the output is read from a results file written by ``evaluation.run_retrieval``
-or ``evaluation.run_factuality``; nothing is computed or filled in here beyond rounding.
+Every number in the output is read from a results file written by ``evaluation.run_retrieval``,
+``evaluation.run_factuality`` or ``evaluation.run_temporal``; nothing is computed or filled in
+here beyond rounding.
 """
 
 import argparse
@@ -383,6 +386,150 @@ def plot_factuality(results: Mapping[str, Any], out_dir: Path) -> list[Path]:
     return [reliability, risk_coverage]
 
 
+_TEMPORAL_INTRO = (
+    "This is an out-of-distribution check labeled by construction: every gold verdict follows "
+    "from the generated document versions (a claim is supported when the fact has the claim's "
+    "value at that version, contradicted when it has another value, insufficient when the fact "
+    "is absent). The calibrator trained on RAGTruth is used unchanged; nothing was tuned on "
+    "this data. The 30-case sample in [temporal-sample.md](temporal-sample.md) is for human "
+    "review."
+)
+
+_TEMPORAL_DEFINITIONS = (
+    "Definitions:",
+    "",
+    "- As-of analyses use each version's effective time plus one day; the live row is the "
+    "analysis run before the new versions were uploaded (gold: version 1).",
+    "- Temporal correctness: a claim counts when its predicted verdict changes between "
+    "versions exactly where the gold verdict changes.",
+    "- Supporting-span correctness: of the claims predicted supported, those whose first "
+    "supporting evidence item is in the version valid at the as-of time and whose span text "
+    "contains the claim's value.",
+    "- Source change: gold changed means the gold verdict at the last version differs from "
+    "version 1; predicted changed means the claim's latest verdict (re-check or original) "
+    "differs from its original one.",
+    "- A rate with no cases behind it is shown as n/a.",
+)
+
+_TEMPORAL_VERDICT_HEADER = (
+    "| As-of | Claims | Accuracy | Macro-F1 | False-supported |",
+    "| --- | ---: | ---: | ---: | ---: |",
+)
+
+
+def _count_of(count: int, total: int, rate: float | None) -> str:
+    return f"{count} of {total} ({_num(rate)})"
+
+
+def _verdict_row(label: str, scores: Mapping[str, Any]) -> str:
+    return (
+        f"| {label} | {scores['n']} | {_num(scores['accuracy'])} | {_num(scores['macro_f1'])} "
+        f"| {_num(scores['false_supported_rate'])} |"
+    )
+
+
+def render_temporal(results: Mapping[str, Any]) -> str:
+    """The synthetic temporal and provenance benchmark as markdown."""
+    env, corpus = results["env"], results["corpus"]
+    models, calibrator = results["models"], results["calibrator"]
+    validity, spans = results["evidence_validity"], results["span_correctness"]
+    changes, temporal = results["source_change"], results["temporal_correctness"]
+    by_kind = ", ".join(f"{kind} {count}" for kind, count in corpus["claims_by_kind"].items())
+    links = _count_of(validity["n_valid_links"], validity["n_links"], validity["link_rate"])
+    citations = _count_of(
+        validity["n_valid_citations"], validity["n_citations"], validity["citation_rate"]
+    )
+    span_correct = _count_of(spans["n_correct"], spans["n_supported"], spans["rate"])
+
+    sections = [
+        "# Temporal and provenance benchmark (synthetic)\n\n" + _TEMPORAL_INTRO,
+        "\n".join(
+            [
+                "## Environment",
+                "",
+                f"- Run: {results['started_at']} to {results['finished_at']} "
+                f"(total {results['runtime_seconds']:.1f} s), seed {results['seed']}",
+                _commit_line(env),
+                f"- CPU: {_text(env.get('cpu'))}, RAM: {_text(env.get('ram_gb'), ' GB')}",
+                f"- Python: {_text(env.get('python'))}, torch: {_text(env.get('torch'))}, "
+                f"PostgreSQL: {_text(env.get('postgres'))}, pgvector: "
+                f"{_text(env.get('pgvector'))}",
+                f"- Models: NLI {models['nli']}, embedder {models['embedder']}, "
+                f"reranker {models['reranker']}",
+                f"- Calibrator: {calibrator['id']} ({calibrator['premise_mode']} premises, "
+                f"evidence_k = {calibrator['evidence_k']})",
+            ]
+        ),
+        "\n".join(
+            [
+                "## Corpus",
+                "",
+                f"- Families: {corpus['families']}, distractors: {corpus['distractors']}, "
+                f"conflicting copies in the second tenant: {corpus['foreign']}",
+                f"- Document versions: {corpus['versions']}; claims: {corpus['claims']} "
+                f"({by_kind})",
+                f"- Analyses: {corpus['analyses']} (one live per family, one as-of per "
+                "family version)",
+                f"- Re-verification jobs run: {results['reverify']['jobs']}",
+            ]
+        ),
+        "\n".join(
+            [
+                "## Verdicts by as-of time",
+                "",
+                *_TEMPORAL_VERDICT_HEADER,
+                _verdict_row("live (before new versions)", results["live"]),
+                *(_verdict_row(f"v{row['version']}", row) for row in results["per_version"]),
+                "",
+                "False-supported is the share of claims whose gold verdict is not supported "
+                "that were predicted supported.",
+            ]
+        ),
+        "\n".join(
+            [
+                "## Temporal correctness",
+                "",
+                "| Claims | Correct | Rate |",
+                "| ---: | ---: | ---: |",
+                f"| {temporal['n_claims']} | {temporal['n_correct']} | {_num(temporal['rate'])} |",
+            ]
+        ),
+        "\n".join(
+            [
+                "## Evidence and citation validity",
+                "",
+                f"- Evidence links valid: {links} over {validity['n_analyses']} analyses",
+                f"- Citations valid: {citations}",
+                f"- Supporting-span correctness: {span_correct}",
+                f"- Supporting item in the valid version: "
+                f"{spans['n_version_correct']} of {spans['n_supported']}; span contains the "
+                f"claim's value: {spans['n_span_contains_value']} of {spans['n_supported']}",
+            ]
+        ),
+        "\n".join(
+            [
+                "## Source-change detection",
+                "",
+                f"Claims checked at least once: {changes['n_checked']} of {changes['n_claims']}.",
+                "",
+                "| Gold changed | Predicted changed | True positives | Precision | Recall |",
+                "| ---: | ---: | ---: | ---: | ---: |",
+                f"| {changes['n_gold_changed']} | {changes['n_predicted_changed']} "
+                f"| {changes['tp']} | {_num(changes['precision'])} | {_num(changes['recall'])} |",
+            ]
+        ),
+        "\n".join(
+            [
+                "## Cross-tenant leakage",
+                "",
+                f"- cross_tenant_links: {results['cross_tenant_links']} (must be 0)",
+            ]
+        ),
+        "\n".join(_TEMPORAL_DEFINITIONS),
+    ]
+    return "\n\n".join(sections) + "\n"
+
+
 def _write_markdown(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # newline="\n": the committed file uses LF whatever the platform.
@@ -401,11 +548,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     factuality.add_argument("--atomic", type=Path, help="the atomic-subset JSON of the same run")
     factuality.add_argument("--out", type=Path, default=Path("docs/results/factuality.md"))
     factuality.add_argument("--figures", type=Path, default=Path("docs/results/figures"))
+    temporal = commands.add_parser("temporal", help="render the synthetic temporal results")
+    temporal.add_argument("results", type=Path, help="results JSON of run_temporal")
+    temporal.add_argument("--out", type=Path, default=Path("docs/results/temporal.md"))
     args = parser.parse_args(argv)
 
     if args.command == "retrieval":
         results = [json.loads(path.read_text(encoding="utf-8")) for path in args.results]
         _write_markdown(args.out, render_retrieval(results))
+        return 0
+
+    if args.command == "temporal":
+        temporal_results = json.loads(args.results.read_text(encoding="utf-8"))
+        _write_markdown(args.out, render_temporal(temporal_results))
         return 0
 
     def read(path: Path | None) -> Any:
