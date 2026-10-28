@@ -223,3 +223,20 @@ class PassageBoundaryOut(BaseModel):
     page_start: int | None
     page_end: int | None
     section: str | None
+
+
+class DiffHunkOut(BaseModel):
+    op: Literal["equal", "insert", "delete", "replace"]
+    from_start: int
+    from_end: int
+    to_start: int
+    to_end: int
+    from_text: str
+    to_text: str
+
+
+class DiffOut(BaseModel):
+    from_version: int
+    to_version: int
+    hunks: list[DiffHunkOut]
+    stats: dict[str, int]  # hunk counts per op

@@ -4,11 +4,13 @@ Read routes need read permission on the document's collection, uploads and delet
 write. A document the caller cannot see is reported exactly like one that does not exist.
 """
 
+import asyncio
 from collections.abc import Callable
+from dataclasses import asdict
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, Form, Query, Request, Response, UploadFile
 from psycopg import AsyncConnection
 from pydantic import AwareDatetime
 
@@ -21,6 +23,8 @@ from backend.api.pagination import (
     page_params,
 )
 from backend.api.schemas_v1 import (
+    DiffHunkOut,
+    DiffOut,
     DocumentDetailOut,
     DocumentOut,
     PassageBoundaryOut,
@@ -36,11 +40,13 @@ from backend.auth.service import Principal
 from backend.authz.policy import readable_collection_ids, require_collection
 from backend.db.pool import Database
 from backend.db.repos import audit, documents
+from backend.ingest.diff import diff_texts
 from backend.ingest.intake import IntakeResult, intake_upload
 
 router = APIRouter()
 
 MAX_TEXT_CHARS = 100_000
+DIFF_OPS = ("equal", "insert", "delete", "replace")
 
 
 def _document_not_found() -> ApiError:
@@ -281,3 +287,29 @@ async def list_version_passages(
         version = await _find_version(conn, document_id, version_number)
         rows = await documents.list_passages(conn, version["id"])
     return [PassageBoundaryOut(**row) for row in rows]
+
+
+@router.get("/documents/{document_id}/diff", response_model=DiffOut)
+async def diff_versions(
+    document_id: UUID,
+    from_version: Annotated[int, Query(alias="from")],
+    to_version: Annotated[int, Query(alias="to")],
+    principal: Principal = Depends(current_principal),
+    db: Database = Depends(get_db),
+) -> DiffOut:
+    async with db.tenant_tx(principal.tenant_id) as conn:
+        await _load_document(conn, principal, document_id, "read")
+        old = await documents.get_version(conn, document_id, from_version)
+        new = old
+        if to_version != from_version:
+            new = await documents.get_version(conn, document_id, to_version)
+    if old is None or new is None:
+        raise _version_not_found()
+    # Diffing is CPU bound and quadratic in the worst case: keep it off the event loop.
+    hunks = await asyncio.to_thread(diff_texts, old["text"], new["text"])
+    return DiffOut(
+        from_version=from_version,
+        to_version=to_version,
+        hunks=[DiffHunkOut(**asdict(hunk)) for hunk in hunks],
+        stats={op: sum(1 for hunk in hunks if hunk.op == op) for op in DIFF_OPS},
+    )
