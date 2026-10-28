@@ -35,6 +35,16 @@ def _name_taken() -> ApiError:
     return ApiError(409, "collection_name_taken", "A collection with this name already exists")
 
 
+def _not_empty() -> ApiError:
+    return ApiError(
+        409,
+        "collection_not_empty",
+        "Collection still has documents",
+        "A collection that holds documents, including deleted ones whose history is kept, "
+        "cannot be deleted",
+    )
+
+
 def _is_name_conflict(exc: psycopg.errors.UniqueViolation) -> bool:
     return exc.diag.constraint_name == _NAME_CONSTRAINT
 
@@ -140,17 +150,23 @@ async def delete_collection(
     principal: Principal = Depends(current_principal),
     db: Database = Depends(get_db),
 ) -> Response:
-    async with db.tenant_tx(principal.tenant_id) as conn:
-        await require_collection(conn, principal, collection_id, "admin")
-        await collections.delete_collection(conn, collection_id)
-        await audit.record(
-            conn,
-            action="collection_deleted",
-            tenant_id=principal.tenant_id,
-            user_id=principal.user_id,
-            target_type="collection",
-            target_id=str(collection_id),
-        )
+    try:
+        async with db.tenant_tx(principal.tenant_id) as conn:
+            await require_collection(conn, principal, collection_id, "admin")
+            await collections.delete_collection(conn, collection_id)
+            await audit.record(
+                conn,
+                action="collection_deleted",
+                tenant_id=principal.tenant_id,
+                user_id=principal.user_id,
+                target_type="collection",
+                target_id=str(collection_id),
+            )
+    except psycopg.errors.ForeignKeyViolation:
+        # Documents reference their collection. Soft deletion keeps the document, its versions
+        # and its passages (provenance for past analyses), so a collection that ever held a
+        # document can never be removed.
+        raise _not_empty() from None
     return Response(status_code=204)
 
 

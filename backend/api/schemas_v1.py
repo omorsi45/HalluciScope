@@ -16,9 +16,17 @@ def _reject_surrogates(value: str) -> str:
     return value
 
 
+def _reject_nul(value: str) -> str:
+    """Postgres text cannot hold NUL, so it would crash the insert instead of failing validation."""
+    if "\x00" in value:
+        raise ValueError("must not contain NUL characters")
+    return value
+
+
 # Every request string ends with the surrogate check so a JSON "\ud800" is a 422, not a 500.
 # The constraints come first: stacking them on an already validated str skips the strip.
 _NO_SURROGATES = AfterValidator(_reject_surrogates)
+_NO_NUL = AfterValidator(_reject_nul)
 Email = Annotated[str, StringConstraints(max_length=320), _NO_SURROGATES]
 Password = Annotated[str, StringConstraints(max_length=256), _NO_SURROGATES]
 DisplayName = Annotated[str, StringConstraints(max_length=100), _NO_SURROGATES]
@@ -28,6 +36,12 @@ Name = Annotated[
     _NO_SURROGATES,
 ]
 Description = Annotated[str, StringConstraints(max_length=1000), _NO_SURROGATES]
+Title = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=300),
+    _NO_SURROGATES,
+    _NO_NUL,
+]
 
 
 class RegisterIn(BaseModel):
@@ -141,3 +155,71 @@ class AuditOut(BaseModel):
     target_id: str | None
     at: datetime
     details: dict | None
+
+
+class UploadAcceptedOut(BaseModel):
+    document_id: UUID
+    upload_id: UUID
+    status: str
+
+
+class UploadOut(BaseModel):
+    id: UUID
+    document_id: UUID
+    status: str
+    version_id: UUID | None
+    version_number: int | None
+    error_code: str | None
+    stats: dict
+    created_at: datetime
+    updated_at: datetime
+
+
+class DocumentOut(BaseModel):
+    id: UUID
+    collection_id: UUID
+    title: str
+    filename: str
+    mime_type: str
+    current_version_number: int | None
+    version_count: int
+    created_at: datetime
+
+
+class VersionSummaryOut(BaseModel):
+    id: UUID
+    version_number: int
+    effective_from: datetime
+    created_at: datetime
+    char_count: int
+    n_passages: int
+    parser: str
+    is_current: bool
+
+
+class DocumentDetailOut(DocumentOut):
+    versions: list[VersionSummaryOut]
+
+
+class VersionOut(VersionSummaryOut):
+    page_map: list[list[int]]
+    sections: list
+    metadata: dict
+    parser_version: str
+
+
+class VersionTextOut(BaseModel):
+    start: int
+    end: int
+    char_count: int
+    text: str
+
+
+class PassageBoundaryOut(BaseModel):
+    id: UUID
+    ordinal: int
+    start_char: int
+    end_char: int
+    page_start: int | None
+    page_end: int | None
+    section: str | None

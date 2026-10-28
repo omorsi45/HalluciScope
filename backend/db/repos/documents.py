@@ -17,11 +17,15 @@ _DOCUMENT_COLUMNS = (
 )
 _DOCUMENT_FROM = "from documents d left join document_versions v on v.id = d.current_version_id "
 
-# Everything except the (large) text.
+# Everything except the (large) text. n_passages and is_current are computed in the same
+# statement as the row, so they always agree with it.
 _VERSION_COLUMNS = (
-    "id, document_id, version_number, effective_from, content_sha256, blob_sha256, "
-    "metadata, parser, parser_version, char_count, created_by, created_at"
+    "v.id, v.document_id, v.version_number, v.effective_from, v.content_sha256, v.blob_sha256, "
+    "v.metadata, v.parser, v.parser_version, v.char_count, v.created_by, v.created_at, "
+    "(select count(*) from passages p where p.version_id = v.id)::int as n_passages, "
+    "(v.id = d.current_version_id) is true as is_current"
 )
+_VERSION_FROM = "from document_versions v join documents d on d.id = v.document_id "
 
 
 async def insert_blob(conn: AsyncConnection, tenant_id: UUID, sha256: bytes, data: bytes) -> None:
@@ -93,8 +97,8 @@ async def list_documents(
 
 async def list_versions(conn: AsyncConnection, document_id: UUID) -> list[dict[str, Any]]:
     cur = await conn.execute(
-        f"select {_VERSION_COLUMNS} from document_versions where document_id = %s "
-        "order by version_number",
+        f"select {_VERSION_COLUMNS} {_VERSION_FROM}where v.document_id = %s "
+        "order by v.version_number",
         (document_id,),
     )
     return await cur.fetchall()
@@ -105,8 +109,8 @@ async def get_version(
 ) -> dict[str, Any] | None:
     """One version including its text, page map, and sections."""
     cur = await conn.execute(
-        f"select {_VERSION_COLUMNS}, text, page_map, sections from document_versions "
-        "where document_id = %s and version_number = %s",
+        f"select {_VERSION_COLUMNS}, v.text, v.page_map, v.sections {_VERSION_FROM}"
+        "where v.document_id = %s and v.version_number = %s",
         (document_id, version_number),
     )
     return await cur.fetchone()
@@ -132,6 +136,19 @@ async def list_passages(conn: AsyncConnection, version_id: UUID) -> list[dict[st
         (version_id,),
     )
     return await cur.fetchall()
+
+
+async def get_upload(conn: AsyncConnection, upload_id: UUID) -> dict[str, Any] | None:
+    """An upload of a live document, with the document's collection and the version number."""
+    cur = await conn.execute(
+        "select u.id, u.document_id, u.status, u.version_id, v.version_number, u.error_code, "
+        "u.stats, u.created_at, u.updated_at, d.collection_id "
+        "from uploads u join documents d on d.id = u.document_id "
+        "left join document_versions v on v.id = u.version_id "
+        "where u.id = %s and d.deleted_at is null",
+        (upload_id,),
+    )
+    return await cur.fetchone()
 
 
 async def soft_delete_document(conn: AsyncConnection, document_id: UUID) -> bool:
