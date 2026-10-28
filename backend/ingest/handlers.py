@@ -1,5 +1,8 @@
 """The ingest_upload job: parse a stored upload, append a version, and settle the upload row.
 
+``process_upload`` does the work and is idempotent. The job runs it for an upload queued by
+``intake_upload``; a quick analysis runs it inline for its own upload.
+
 Failures are reduced to stable codes. Exception messages, filenames and text never reach a
 log line or a job row.
 """
@@ -17,12 +20,13 @@ from backend.db.pool import Database
 from backend.db.repos import documents
 from backend.ingest.errors import IngestError
 from backend.ingest.parsers import parse_with_timeout
-from backend.ingest.service import create_version
+from backend.ingest.service import VersionResult, create_version
 from backend.ingest.types import ParsedDocument
 from backend.jobs.queue import enqueue
 from backend.jobs.worker import JobContext, PermanentJobError, RetryableJobError
 from backend.models.protocols import Embedder
-from backend.obs.logging import bind
+from backend.obs.logging import bind, request_id_var
+from backend.services import Services
 
 logger = logging.getLogger(__name__)
 
@@ -73,20 +77,23 @@ async def _set_failed(db: Database, tenant_id: UUID, upload_id: UUID, error_code
         )
 
 
-async def _fail_permanently(ctx: JobContext, upload_id: UUID, code: str) -> NoReturn:
-    await _set_failed(ctx.db, ctx.job.tenant_id, upload_id, code)
+async def _fail_permanently(db: Database, tenant_id: UUID, upload_id: UUID, code: str) -> NoReturn:
+    await _set_failed(db, tenant_id, upload_id, code)
     raise PermanentJobError(code)
 
 
-async def _append_version(ctx: JobContext, upload: dict[str, Any], parsed: ParsedDocument) -> None:
-    """Create the version, settle the upload and queue re-verification in one transaction."""
-    services = ctx.services
-    tenant_id = ctx.job.tenant_id
-    async with ctx.db.tenant_tx(tenant_id) as conn:
+async def _append_version(
+    services: Services, tenant_id: UUID, upload: dict[str, Any], parsed: ParsedDocument
+) -> VersionResult | None:
+    """Create the version, settle the upload and queue re-verification in one transaction.
+
+    Returns None when the upload reached a final status in the meantime.
+    """
+    async with services.db.tenant_tx(tenant_id) as conn:
         # The row lock makes a second worker that ended up on this upload wait, then see it final.
         current = await _load_upload(conn, upload["id"], lock=True)
         if current["status"] not in _OPEN:
-            return
+            return None
         result = await create_version(
             conn,
             _EmbeddingGuard(services.embedder),
@@ -126,7 +133,7 @@ async def _append_version(ctx: JobContext, upload: dict[str, Any], parsed: Parse
                 tenant_id=tenant_id,
                 priority=5,
                 idempotency_key=f"reverify:{result.version_id}",
-                request_id=ctx.job.request_id,
+                request_id=request_id_var.get(),
             )
     logger.info(
         "upload ingested",
@@ -138,17 +145,24 @@ async def _append_version(ctx: JobContext, upload: dict[str, Any], parsed: Parse
             "version_number": result.version_number,
         },
     )
+    return result
 
 
-async def handle_ingest_upload(ctx: JobContext) -> None:
-    services = ctx.services
-    tenant_id = ctx.job.tenant_id
-    upload_id = UUID(ctx.job.payload["upload_id"])
+async def process_upload(
+    services: Services, tenant_id: UUID, upload_id: UUID
+) -> VersionResult | None:
+    """Parse the stored upload and append its version; the work of the ``ingest_upload`` job.
+
+    Idempotent: returns None, doing nothing, for an upload that is missing or already final.
+    Otherwise returns the created version, or the current one when the content is unchanged.
+    An ingestion failure fails the upload row and raises ``PermanentJobError(code)``; a failed
+    embedding raises ``RetryableJobError("embed_failed")`` and leaves the upload open.
+    """
     with bind(tenant_id=str(tenant_id)):
-        async with ctx.db.tenant_tx(tenant_id) as conn:
+        async with services.db.tenant_tx(tenant_id) as conn:
             upload = await _load_upload(conn, upload_id)
             if upload is None or upload["status"] not in _OPEN:
-                return
+                return None
             await conn.execute(
                 "update uploads set status = 'processing', updated_at = now() where id = %s",
                 (upload_id,),
@@ -161,19 +175,23 @@ async def handle_ingest_upload(ctx: JobContext) -> None:
                 data, upload["filename"], services.settings.parse_timeout_s
             )
         except IngestError as exc:
-            await _fail_permanently(ctx, upload_id, exc.code)
+            await _fail_permanently(services.db, tenant_id, upload_id, exc.code)
 
         try:
-            await _append_version(ctx, upload, parsed)
+            return await _append_version(services, tenant_id, upload, parsed)
         except IngestError as exc:
-            await _fail_permanently(ctx, upload_id, exc.code)
+            await _fail_permanently(services.db, tenant_id, upload_id, exc.code)
         except LookupError as exc:
             if type(exc) is not LookupError:
                 # KeyError and IndexError are bugs, not a missing document.
                 raise
-            await _fail_permanently(ctx, upload_id, "document_deleted")
+            await _fail_permanently(services.db, tenant_id, upload_id, "document_deleted")
         except _EmbedFailed:
             raise RetryableJobError("embed_failed") from None
+
+
+async def handle_ingest_upload(ctx: JobContext) -> None:
+    await process_upload(ctx.services, ctx.job.tenant_id, UUID(ctx.job.payload["upload_id"]))
 
 
 async def fail_ingest_upload(ctx: JobContext, error_code: str) -> None:

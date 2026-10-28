@@ -1,9 +1,13 @@
-from pydantic import BaseModel
+"""Request and response shapes of the deprecated /api routes (see ``routes/legacy.py``)."""
+
+from pydantic import BaseModel, Field
+
+from backend.api.schemas_v1 import AskQuestion, DocumentText, FeedbackNote
 
 
 class AnalyzeRequest(BaseModel):
-    document_text: str
-    question: str
+    document_text: DocumentText
+    question: AskQuestion
 
 
 class ClaimResponse(BaseModel):
@@ -14,7 +18,7 @@ class ClaimResponse(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
-    id: int | None = None
+    id: str
     question: str
     answer: str
     scored_claims: list[ClaimResponse]
@@ -23,18 +27,18 @@ class AnalyzeResponse(BaseModel):
 
 
 class FeedbackRequest(BaseModel):
-    analysis_id: int
-    claim_index: int
+    analysis_id: str
+    claim_index: int = Field(ge=0)
     is_correct: bool
-    note: str | None = None
+    note: FeedbackNote | None = None
 
 
 class FeedbackResponse(BaseModel):
-    id: int
+    id: str
 
 
 class AnalysisListItem(BaseModel):
-    id: int
+    id: str
     question: str
     answer: str
     overall_score: float

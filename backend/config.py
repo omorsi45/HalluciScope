@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     analysis_timeout_s: float = 300.0
     max_active_analyses: int = 3
 
+    # Quick checks: how long the deprecated POST /api/analyze waits for the worker
+    quick_wait_s: float = 120.0
+
     # Ingestion limits
     max_upload_bytes: int = 20_971_520
     parse_timeout_s: float = 60.0

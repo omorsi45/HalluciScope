@@ -4,10 +4,12 @@
 is the analysis id; the question and answer live only in the RLS table `analyses`.
 
 `run_analysis` is the worker side. An ask analysis retrieves passages, has the LLM answer from
-them and verifies the answer; a verify or quick analysis verifies the stored answer. Verdicts
-come only from the NLI features and the calibrator (`VerificationEngine`); the LLM writes the
-answer and splits it into claims, nothing more. Every failure is reduced to a stable error code:
-exception messages and text never reach a log line or a row.
+them and verifies the answer; a verify analysis verifies the stored answer. A quick analysis
+first ingests its own upload inline (`process_upload`), then runs like an ask over that one
+hidden collection. Verdicts come only from the NLI features and the calibrator
+(`VerificationEngine`); the LLM writes the answer and splits it into claims, nothing more.
+Every failure is reduced to a stable error code: exception messages and text never reach a log
+line or a row.
 """
 
 import asyncio
@@ -21,6 +23,8 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from psycopg import AsyncConnection
+
 from backend.api.errors import ApiError
 from backend.auth.service import Principal
 from backend.authz.policy import readable_collection_ids
@@ -29,7 +33,8 @@ from backend.config import Settings
 from backend.db.pool import Database
 from backend.db.repos import analyses
 from backend.generate.answer import CitationRef, generate_answer, parse_citations
-from backend.jobs.queue import enqueue
+from backend.ingest.handlers import process_upload
+from backend.jobs import queue
 from backend.jobs.worker import PermanentJobError
 from backend.llm.client import LLMClient, LLMFailure
 from backend.obs.logging import bind, request_id_var
@@ -117,6 +122,17 @@ class _Stages:
             self.timings[stage] = round(time.perf_counter() - started, 3)
 
 
+async def require_capacity(conn: AsyncConnection, principal: Principal, settings: Settings) -> None:
+    """Raise a 429 `too_many_analyses` when the user already has the maximum queued or running."""
+    if await analyses.count_active(conn, principal.user_id) >= settings.max_active_analyses:
+        raise ApiError(
+            429,
+            "too_many_analyses",
+            "Too many analyses in progress",
+            "Wait for a running analysis to finish.",
+        )
+
+
 async def create_analysis_request(
     db: Database,
     principal: Principal,
@@ -129,20 +145,16 @@ async def create_analysis_request(
     options: Mapping[str, Any],
     settings: Settings,
     collection_kinds: Sequence[str] = ("normal",),
+    enqueue: bool = True,
 ) -> UUID:
     """Store a queued analysis and its `run_analysis` job; return the analysis id.
 
+    `enqueue=False` stores the analysis without a job, for a caller that runs it in-process.
     Raises a 429 `too_many_analyses` when the user already has `max_active_analyses` queued or
     running, and a 404 `collection_not_found` for a collection they cannot read.
     """
     async with db.tenant_tx(principal.tenant_id) as conn:
-        if await analyses.count_active(conn, principal.user_id) >= settings.max_active_analyses:
-            raise ApiError(
-                429,
-                "too_many_analyses",
-                "Too many analyses in progress",
-                "Wait for a running analysis to finish.",
-            )
+        await require_capacity(conn, principal, settings)
         readable = await readable_collection_ids(
             conn, principal, collection_ids, kinds=collection_kinds
         )
@@ -161,15 +173,16 @@ async def create_analysis_request(
             known_at=known_at,
             options=dict(options),
         )
-        await enqueue(
-            conn,
-            "run_analysis",
-            {"analysis_id": str(analysis_id)},
-            tenant_id=principal.tenant_id,
-            priority=JOB_PRIORITY,
-            idempotency_key=f"analysis:{analysis_id}",
-            request_id=request_id_var.get(),
-        )
+        if enqueue:
+            await queue.enqueue(
+                conn,
+                "run_analysis",
+                {"analysis_id": str(analysis_id)},
+                tenant_id=principal.tenant_id,
+                priority=JOB_PRIORITY,
+                idempotency_key=f"analysis:{analysis_id}",
+                request_id=request_id_var.get(),
+            )
     return analysis_id
 
 
@@ -217,6 +230,30 @@ async def _extract_claims(
     return await llm_atomic_claims(llm, answer)
 
 
+async def _ingest_quick_upload(
+    services: Services, tenant_id: UUID, analysis: Mapping[str, Any]
+) -> None:
+    """Parse and index the quick analysis's own upload, so the retrieval below can see it.
+
+    Raises `PermanentJobError(code)` with the ingestion error code when the document cannot be
+    read, including when an earlier attempt already failed the upload.
+    """
+    upload_id = UUID(analysis["options"]["upload_id"])
+    if await process_upload(services, tenant_id, upload_id) is not None:
+        return
+    # Already final: a finished upload is fine, but a failed one must not be answered from an
+    # empty collection.
+    async with services.db.tenant_tx(tenant_id) as conn:
+        cur = await conn.execute(
+            "select status, error_code from uploads where id = %s", (upload_id,)
+        )
+        upload = await cur.fetchone()
+    if upload is None:
+        raise PermanentJobError(_INTERNAL_ERROR)
+    if upload["status"] == "failed":
+        raise PermanentJobError(upload["error_code"] or _INTERNAL_ERROR)
+
+
 async def _execute(services: Services, tenant_id: UUID, analysis: Mapping[str, Any]) -> None:
     """Run every stage and store the results; raises on any failure."""
     db = services.db
@@ -241,9 +278,11 @@ async def _execute(services: Services, tenant_id: UUID, analysis: Mapping[str, A
         await analyses.set_status(conn, analysis_id, "running")
 
     context: Sequence[PassageHit] = ()
-    if analysis["kind"] == "ask":
+    if analysis["kind"] in ("ask", "quick"):
         question = analysis["question"]
         async with stages.enter("retrieving"):
+            if analysis["kind"] == "quick":
+                await _ingest_quick_upload(services, tenant_id, analysis)
             hits = await retriever.search(
                 question, scope, k=ASK_K, rerank=True, candidates=ASK_CANDIDATES
             )
@@ -316,6 +355,9 @@ async def _attempt(services: Services, tenant_id: UUID, analysis: Mapping[str, A
         logger.exception("analysis failed")
         return _INTERNAL_ERROR
     except LLMFailure as exc:
+        return exc.code
+    except PermanentJobError as exc:
+        # Only a quick analysis's inline ingestion raises this: its code is the analysis's.
         return exc.code
     except CalibratorMismatch:
         return "calibrator_mismatch"

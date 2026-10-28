@@ -80,6 +80,13 @@ Answer = Annotated[
     _NO_SURROGATES,
     _NO_NUL,
 ]
+# A pasted document is stored as UTF-8 bytes, which a lone surrogate cannot be.
+DocumentText = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=1_000_000),
+    _NO_SURROGATES,
+    _NO_NUL,
+]
 
 
 class RegisterIn(BaseModel):

@@ -2,6 +2,7 @@
 
 from typing import ClassVar
 
+import httpx
 import pytest
 
 from backend.api import startup
@@ -21,46 +22,25 @@ class _FakeDb:
         self.closed = True
 
 
-class _FakeRepo:
-    instances: ClassVar[list["_FakeRepo"]] = []
-
-    def __init__(self, path: str) -> None:
-        self.closed = False
-        self.fail_close = False
-        _FakeRepo.instances.append(self)
-
-    async def init(self) -> None:
-        pass
-
-    async def close(self) -> None:
-        self.closed = True
-        if self.fail_close:
-            raise RuntimeError("repo close failed")
+class _FailingCloseClient(httpx.AsyncClient):
+    async def aclose(self) -> None:
+        await super().aclose()
+        raise RuntimeError("http close failed")
 
 
 @pytest.fixture
 def patched(monkeypatch):
     _FakeDb.instances.clear()
-    _FakeRepo.instances.clear()
     monkeypatch.setattr(startup, "Database", _FakeDb)
-    monkeypatch.setattr(startup, "Repository", _FakeRepo)
     monkeypatch.setattr(startup, "configure_logging", lambda level: None)
     monkeypatch.setattr(startup, "load_embedder", lambda settings: object())
-    monkeypatch.setattr(startup, "get_embedding_model", lambda: object())
-    monkeypatch.setattr(startup, "get_nli_model", lambda: (object(), object()))
-    monkeypatch.setattr(startup, "Chunker", lambda **kw: object())
-    monkeypatch.setattr(startup, "NLIVerifier", lambda **kw: object())
-    monkeypatch.setattr(startup, "SimilarityVerifier", lambda **kw: object())
-    monkeypatch.setattr(startup, "ConsistencyVerifier", lambda **kw: object())
-    monkeypatch.setattr(startup, "EnsembleScorer", lambda **kw: object())
-    monkeypatch.setattr(startup, "Pipeline", lambda **kw: object())
 
 
 async def test_startup_failure_after_db_open_closes_pool(patched, monkeypatch):
-    def boom():
-        raise RuntimeError("model load failed")
+    def boom(db, settings):
+        raise RuntimeError("auth service failed")
 
-    monkeypatch.setattr(startup, "get_embedding_model", boom)
+    monkeypatch.setattr(startup, "AuthService", boom)
     app = startup.create_configured_app()
     with pytest.raises(RuntimeError):
         async with app.router.lifespan_context(app):
@@ -95,12 +75,31 @@ async def test_embedder_load_failure_closes_pool(patched, monkeypatch):
     assert _FakeDb.instances[0].closed is True
 
 
-async def test_shutdown_closes_every_resource_even_if_one_fails(patched, monkeypatch):
+async def test_startup_opens_no_sqlite_database(patched, monkeypatch, tmp_path):
+    legacy = tmp_path / "legacy.db"
+    monkeypatch.setenv("HALLUCISCOPE_DB_PATH", str(legacy))
+    app = startup.create_configured_app()
+    async with app.router.lifespan_context(app):
+        pass
+    assert not legacy.exists()
+
+
+async def test_shutdown_closes_the_http_client_and_the_database(patched):
+    app = startup.create_configured_app()
+    async with app.router.lifespan_context(app):
+        assert app.state.http is app.state.http_client
+        assert app.state.http_client.is_closed is False
+    assert app.state.http_client.is_closed is True
+    assert _FakeDb.instances[0].closed is True
+
+
+async def test_shutdown_closes_the_database_even_if_the_http_client_fails_to_close(
+    patched, monkeypatch
+):
+    monkeypatch.setattr(startup.httpx, "AsyncClient", _FailingCloseClient)
     app = startup.create_configured_app()
     with pytest.raises(RuntimeError):
         async with app.router.lifespan_context(app):
-            _FakeRepo.instances[0].fail_close = True
-    assert _FakeRepo.instances[0].closed is True
-    assert _FakeDb.instances[0].closed is True
+            pass
     assert app.state.http_client.is_closed is True
-    assert app.state.http is app.state.http_client
+    assert _FakeDb.instances[0].closed is True

@@ -9,12 +9,18 @@ _COLUMNS = "c.id, c.name, c.description, c.kind, c.created_at"
 
 
 async def insert_collection(
-    conn: AsyncConnection, tenant_id: UUID, name: str, description: str, created_by: UUID
+    conn: AsyncConnection,
+    tenant_id: UUID,
+    name: str,
+    description: str,
+    created_by: UUID,
+    *,
+    kind: str = "normal",
 ) -> dict[str, Any]:
     cur = await conn.execute(
-        "insert into collections (tenant_id, name, description, created_by) "
-        "values (%s, %s, %s, %s) returning id, name, description, kind, created_at",
-        (tenant_id, name, description, created_by),
+        "insert into collections (tenant_id, name, description, kind, created_by) "
+        "values (%s, %s, %s, %s, %s) returning id, name, description, kind, created_at",
+        (tenant_id, name, description, kind, created_by),
     )
     return await cur.fetchone()
 

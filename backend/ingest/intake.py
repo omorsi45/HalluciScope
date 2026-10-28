@@ -67,12 +67,14 @@ async def intake_upload(
     effective_from: datetime | None = None,
     settings: Settings,
     collection_kinds: Sequence[str] = ("normal",),
+    enqueue_job: bool = True,
 ) -> IntakeResult:
     """Store the upload and queue its ingestion.
 
     Give ``collection_id`` for a new document or ``document_id`` for a new version of an
     existing one. An upload whose bytes equal the document's current version is recorded as
-    ``duplicate`` and queues nothing.
+    ``duplicate`` and queues nothing. ``enqueue_job=False`` records the upload without queueing
+    ``ingest_upload``, for a caller that runs ``process_upload`` itself.
     """
     if (collection_id is None) == (document_id is None):
         raise ValueError("give exactly one of collection_id and document_id")
@@ -152,7 +154,7 @@ async def intake_upload(
             ),
         )
         upload_id: UUID = (await cur.fetchone())["id"]
-        if status == "queued":
+        if status == "queued" and enqueue_job:
             await enqueue(
                 conn,
                 "ingest_upload",
