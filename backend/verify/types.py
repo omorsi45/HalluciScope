@@ -3,7 +3,9 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
+
+from backend.retrieval.types import PassageHit
 
 
 class Verdict(StrEnum):
@@ -44,6 +46,30 @@ class EvidenceSignal:
     nli: NLIResult
     rerank: float | None  # cross-encoder score; None when the passage was not reranked
     dense_cos: float  # cosine similarity between claim and passage embeddings
+
+
+@dataclass(frozen=True)
+class EvidenceItem:
+    """A passage cited as evidence for or against a claim, with the span that carries it."""
+
+    hit: PassageHit
+    nli: NLIResult
+    relation: str  # "supports", "contradicts" or "related"
+    span_start: int  # absolute offsets into the version text, inside the passage
+    span_end: int
+    dense_cos: float
+    rerank: float | None
+
+
+@dataclass(frozen=True)
+class ClaimVerdict:
+    claim: Claim
+    verdict: Verdict
+    probs: dict[str, float]  # keyed by verdict value
+    features: dict[str, float]  # keyed by FEATURE_NAMES
+    evidence: tuple[EvidenceItem, ...]  # the top evidence_k signals, best rerank first
+    signals: tuple[EvidenceSignal, ...]  # every gathered signal, in retrieval order
+    diagnostics: dict[str, Any]
 
 
 class NLIScorer(Protocol):
