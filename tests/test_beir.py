@@ -5,14 +5,19 @@ import io
 import json
 import re
 import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 import pytest
 
-from evaluation import beir, data
+from backend.retrieval.service import PostgresRetriever
+from backend.retrieval.types import PassageHit, SearchScope
+from evaluation import beir, data, run_retrieval
 from evaluation.beir import BeirData
 from evaluation.data import DatasetFile, DatasetIntegrityError
+from tests.fakes import KeywordReranker
 
 pg = pytest.mark.pg
 
@@ -430,3 +435,241 @@ async def test_ingest_commits_in_batches_of_64_documents(db, services, monkeypat
     assert len(summary.doc_map) == 130
     assert len(transactions) == 3  # 64 + 64 + 2
     assert await counts(db, tenant_id) == {"documents": 130, "versions": 130, "current": 130}
+
+
+DOC_A, DOC_B, DOC_C, LEAKED = (UUID(int=n) for n in (1, 2, 3, 99))
+NAMES = {DOC_A: "A", DOC_B: "B", DOC_C: "C"}
+
+
+def make_hit(number: int, document_id: UUID, text: str = "text") -> PassageHit:
+    """A complete hit; `number` is both its passage identity and its 1-based hybrid rank."""
+    return PassageHit(
+        passage_id=UUID(int=1000 + number),
+        document_id=document_id,
+        version_id=UUID(int=0),
+        version_number=1,
+        effective_from=datetime(2026, 1, 1, tzinfo=UTC),
+        document_title="title",
+        text=text,
+        start_char=0,
+        end_char=len(text),
+        page_start=None,
+        page_end=None,
+        section=None,
+        scores={},
+        rank=number,
+    )
+
+
+def test_percentile_is_nearest_rank():
+    values = list(range(20, 0, -1))  # 20 down to 1: the input need not be sorted
+
+    assert run_retrieval.percentile(values, 50) == 10
+    assert run_retrieval.percentile(values, 95) == 19
+    assert run_retrieval.percentile([7.5], 95) == 7.5
+    with pytest.raises(ValueError, match="empty"):
+        run_retrieval.percentile([], 50)
+
+
+def test_split_leaks_drops_and_counts_distractor_hits():
+    hits = [make_hit(1, DOC_A), make_hit(2, LEAKED), make_hit(3, DOC_B), make_hit(4, LEAKED)]
+
+    clean, leaks = run_retrieval.split_leaks(hits, NAMES, {LEAKED})
+
+    assert [hit.rank for hit in clean] == [1, 3]
+    assert leaks == 2
+
+
+def test_split_leaks_rejects_a_hit_from_outside_the_benchmark():
+    with pytest.raises(RuntimeError, match="outside"):
+        run_retrieval.split_leaks([make_hit(1, UUID(int=555))], NAMES, {LEAKED})
+
+
+def test_document_ranking_orders_documents_by_their_best_passage():
+    hits = [make_hit(1, DOC_A), make_hit(2, DOC_B), make_hit(3, DOC_A), make_hit(4, DOC_C)]
+
+    assert run_retrieval.document_ranking(hits, NAMES) == ["A", "B", "C"]
+
+
+async def test_rerank_documents_reranks_only_the_top_documents():
+    # Depth 2 reranks the passages of A and B. C would score 4 and win if it were included;
+    # it must keep its place after them instead.
+    hits = [
+        make_hit(1, DOC_A, "unrelated words"),
+        make_hit(2, DOC_B, "alpha beta gamma"),
+        make_hit(3, DOC_A, "alpha"),
+        make_hit(4, DOC_C, "alpha beta gamma delta"),
+    ]
+
+    ranking = await run_retrieval.rerank_documents(
+        KeywordReranker(), "alpha beta gamma delta", hits, NAMES, depth=2
+    )
+
+    assert ranking == ["B", "A", "C"]
+
+
+async def test_rerank_documents_scores_a_document_by_its_best_passage():
+    # A's first passage scores 0 and its second scores 4; B's only passage scores 2.
+    hits = [
+        make_hit(1, DOC_B, "alpha beta"),
+        make_hit(2, DOC_A, "unrelated words"),
+        make_hit(3, DOC_A, "alpha beta gamma delta"),
+    ]
+
+    ranking = await run_retrieval.rerank_documents(
+        KeywordReranker(), "alpha beta gamma delta", hits, NAMES, depth=50
+    )
+
+    assert ranking == ["A", "B"]
+
+
+def test_git_info_is_null_outside_a_repository(tmp_path):
+    assert run_retrieval.git_info(tmp_path) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("leaks", "parity", "expected"),
+    [(0, 0.0, 0), (0, 9.9e-10, 0), (1, 0.0, 1), (0, 1e-9, 1), (0, 2e-9, 1)],
+)
+def test_main_exits_nonzero_when_a_check_fails(monkeypatch, leaks, parity, expected):
+    async def fake_run(args):
+        return {"checks": {"acl_leaks": leaks, "bm25_parity_max_abs_diff": parity}}
+
+    monkeypatch.setattr(run_retrieval, "run", fake_run)
+
+    assert run_retrieval.main(["--dataset", "scifact"]) == expected
+
+
+@pg
+async def test_run_system_counts_distractor_hits_only_when_the_collection_is_in_scope(db, services):
+    tenant_id, main_id = await beir.ensure_bench_scope(db, "bench", "tiny")
+    _, distractor_id = await beir.ensure_bench_scope(db, "bench", "tiny-distractor")
+    corpus = small_corpus()
+    main = await beir.ingest_beir(services, corpus, tenant_id=tenant_id, collection_id=main_id)
+    distractor = await beir.ingest_beir(
+        services,
+        corpus,
+        tenant_id=tenant_id,
+        collection_id=distractor_id,
+        filename_prefix="distractor-",
+    )
+    names = {document_id: beir_id for beir_id, document_id in main.doc_map.items()}
+    leaked = set(distractor.doc_map.values())
+    retriever = PostgresRetriever(db, services.embedder, services.reranker)
+
+    async def leaks_with(collection_ids):
+        scope = SearchScope(tenant_id, collection_ids)
+        _, latencies, leaks = await run_retrieval.run_system(
+            "bm25", retriever, services.reranker, scope, {"q": "alpha body"}, names, leaked
+        )
+        assert len(latencies) == 1
+        return leaks
+
+    assert await leaks_with((main_id,)) == 0
+    assert await leaks_with((main_id, distractor_id)) > 0
+
+
+@pg
+async def test_bm25_parity_flags_a_retriever_with_other_parameters(db, services):
+    tenant_id, collection_id = await beir.ensure_bench_scope(db, "bench", "tiny")
+    corpus = BeirData(
+        "tiny",
+        {
+            "d1": ("", "alpha alpha alpha beta"),
+            "d2": ("", "alpha gamma gamma gamma gamma delta epsilon"),
+            "d3": ("", "gamma delta"),
+        },
+        {},
+        {},
+    )
+    await beir.ingest_beir(services, corpus, tenant_id=tenant_id, collection_id=collection_id)
+    scope = SearchScope(tenant_id, (collection_id,))
+    same = PostgresRetriever(db, services.embedder, k1=0.9, b=0.4)
+    other = PostgresRetriever(db, services.embedder, k1=1.5, b=0.75)
+
+    assert await run_retrieval.bm25_parity(db, same, scope, ["alpha", "gamma delta"]) < 1e-9
+    assert await run_retrieval.bm25_parity(db, other, scope, ["alpha"]) > 1e-3
+
+
+@pg
+async def test_runner_smoke(db, pg_urls, tmp_path):
+    write_tiny_beir(tmp_path / "data" / "scifact")
+    out = tmp_path / "results" / "retrieval_scifact.json"
+    args = run_retrieval.parse_args(
+        [
+            "--dataset",
+            "scifact",
+            "--database-url",
+            pg_urls["app"],
+            "--embedder",
+            "fake",
+            "--limit-queries",
+            "2",
+            "--data-root",
+            str(tmp_path / "data"),
+            "--out",
+            str(out),
+        ]
+    )
+
+    result = await run_retrieval.run(args)
+
+    assert set(result["systems"]) == {
+        "fts",
+        "bm25",
+        "dense",
+        "dense_exact",
+        "hybrid",
+        "hybrid_rerank",
+    }
+    assert (result["dataset"], result["split"], result["n_queries"]) == ("scifact", "test", 2)
+    assert (result["n_docs"], result["n_passages"], result["n_skipped_docs"]) == (3, 3, 0)
+    assert result["checks"]["acl_leaks"] == 0
+    assert result["checks"]["bm25_parity_max_abs_diff"] < 1e-9
+    for name, metrics in result["systems"].items():
+        for key in ("ndcg@10", "recall@10", "recall@100", "mrr@10"):
+            assert 0.0 <= metrics[key] <= 1.0, (name, key)
+        assert 0.0 < metrics["latency_ms_p50"] <= metrics["latency_ms_p95"], name
+    # Dense search returns every passage of a three-passage corpus, and so do the systems built
+    # on it: both relevant documents are in each top 100.
+    for name in ("dense", "dense_exact", "hybrid", "hybrid_rerank"):
+        assert result["systems"][name]["recall@100"] == 1.0, name
+    assert result["models"] == {"embedder": "fake-hash-384", "reranker": "fake-keyword"}
+    assert result["params"] == {
+        "k1": 0.9,
+        "b": 0.4,
+        "rrf_k": 60,
+        "candidates": 300,
+        "rerank_depth": 50,
+        "ef_search": 300,
+        "passage_target_chars": 800,
+    }
+    env = result["env"]
+    assert set(env) == {
+        "git_commit",
+        "git_dirty",
+        "cpu",
+        "ram_gb",
+        "python",
+        "torch",
+        "postgres",
+        "pgvector",
+    }
+    assert env["postgres"]
+    assert env["pgvector"]
+    assert result["ingest_seconds"] >= 0.0
+    assert result["runtime_seconds"] >= result["ingest_seconds"]
+    assert json.loads(out.read_text(encoding="utf-8")) == result
+    # The distractor collection really was filled with prefixed copies, so a zero leak count
+    # means the access control held, not that there was nothing to leak.
+    async with db.system_tx() as conn:
+        cur = await conn.execute("select id from tenants where name = 'bench'")
+        tenant_id = (await cur.fetchone())["id"]
+    async with db.tenant_tx(tenant_id) as conn:
+        cur = await conn.execute(
+            "select c.name, count(*) as n, bool_and(starts_with(d.filename, 'distractor-')) as p "
+            "from documents d join collections c on c.id = d.collection_id "
+            "group by c.name order by c.name"
+        )
+        rows = [(row["name"], row["n"], row["p"]) for row in await cur.fetchall()]
+    assert rows == [("scifact", 3, False), ("scifact-distractor", 3, True)]
