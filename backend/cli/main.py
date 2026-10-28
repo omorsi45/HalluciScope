@@ -130,8 +130,10 @@ async def _run_worker(settings: Settings) -> None:
     from backend.db.pool import Database
     from backend.jobs.registry import build_failure_handlers, build_handlers
     from backend.jobs.worker import Worker, default_worker_id
+    from backend.models.loader import load_embedder, load_reranker
     from backend.obs.logging import configure_logging
     from backend.obs.metrics_server import start_metrics_server
+    from backend.services import Services
 
     configure_logging(settings.log_level)
     # Each slot can hold a handler, a job heartbeat and its housekeeping at once.
@@ -151,7 +153,7 @@ async def _run_worker(settings: Settings) -> None:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop.set)
             installed.append(sig)
-        services = None  # Plan B introduces the services container
+        services = Services(settings, db, load_embedder(settings), load_reranker(settings))
         base_id = default_worker_id()
         slots = [
             asyncio.create_task(

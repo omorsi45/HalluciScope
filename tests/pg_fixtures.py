@@ -1,5 +1,6 @@
 """Postgres helpers and fixtures for tests marked `pg`."""
 
+import asyncio
 import os
 import uuid
 
@@ -15,6 +16,10 @@ from backend.auth.service import AuthService
 from backend.config import Settings
 from backend.db.migrate import migrate
 from backend.db.pool import Database
+from backend.jobs.registry import build_failure_handlers, build_handlers
+from backend.jobs.worker import Worker
+from backend.services import Services
+from tests.fakes import HashEmbedder, KeywordReranker
 
 ADMIN_URL = os.environ.get(
     "HALLUCISCOPE_TEST_ADMIN_URL", "postgresql://postgres@localhost:54329/postgres"
@@ -29,11 +34,13 @@ __all__ = [
     "client3",
     "create_database",
     "db",
+    "drain",
     "drop_database",
     "ensure_roles",
     "fresh_db_url",
     "pg_urls",
     "role_url",
+    "services",
 ]
 
 
@@ -129,6 +136,37 @@ async def db(pg_urls):
                         sql.SQL(", ").join(sql.Identifier(t) for t in tables)
                     )
                 )
+
+
+@pytest.fixture
+def services(db):
+    """Worker services on the test database, with deterministic fake models."""
+    return Services(Settings(), db, HashEmbedder(), KeywordReranker())
+
+
+async def drain(db, services, kinds=None) -> int:
+    """Run jobs of the given kinds (default: every registered kind) until none is claimable.
+
+    Returns how many ran. A job that failed and waits out a retry backoff is not claimable,
+    so this always settles; the bounds only turn a stuck loop into a fast failure.
+    """
+    handlers = {
+        kind: handler
+        for kind, handler in build_handlers(services).items()
+        if kinds is None or kind in kinds
+    }
+    worker = Worker(
+        db,
+        handlers,
+        failure_handlers=build_failure_handlers(services),
+        services=services,
+    )
+    ran = 0
+    while await asyncio.wait_for(worker.run_once(), 60):
+        ran += 1
+        if ran >= 100:
+            pytest.fail("drain did not settle after 100 jobs", pytrace=False)
+    return ran
 
 
 @pytest.fixture

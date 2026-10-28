@@ -4,7 +4,10 @@ import json
 import logging
 import os
 import signal
+import subprocess
+import sys
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -21,8 +24,11 @@ from backend.jobs.worker import (
 )
 from backend.obs.logging import JsonFormatter
 from backend.obs.metrics import JOB_DURATION, JOBS
+from backend.services import Services
+from tests.fakes import HashEmbedder, KeywordReranker
 
 LIMIT_S = 10.0
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 async def _enqueue(db, kind="ingest", payload=None, **kwargs):
@@ -77,9 +83,29 @@ async def _noop(ctx: JobContext):
     return None
 
 
-def test_build_handlers_is_empty_in_plan_a():
-    assert build_handlers(None) == {}
-    assert build_failure_handlers(None) == {}
+def test_registries_register_the_ingest_upload_job_and_its_failure_hook():
+    assert set(build_handlers(None)) == {"ingest_upload"}
+    assert set(build_failure_handlers(None)) == {"ingest_upload"}
+
+
+def test_worker_import_paths_do_not_load_ml_libraries():
+    # The worker and API import these modules; only calling a model loader may load torch.
+    code = (
+        "import json, sys; import backend.cli.main, backend.jobs.registry, "
+        "backend.ingest.handlers, backend.ingest.intake; "
+        "print(json.dumps([m for m in ('torch', 'sentence_transformers', 'transformers') "
+        "if m in sys.modules]))"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+
+    assert json.loads(result.stdout) == []
 
 
 def test_worker_help_exits_zero():
@@ -897,17 +923,32 @@ def test_worker_command_rejects_concurrency_below_one(monkeypatch):
 
 
 class _Harness:
-    """Fakes for everything _run_worker opens, recording the order of events."""
+    """Fakes for everything _run_worker opens, recording the order of events.
 
-    def __init__(self, monkeypatch, *, slot_zero_raises=False, metrics_raises=False):
+    The model loaders are faked too, so no test here can download or load a real model.
+    """
+
+    def __init__(
+        self, monkeypatch, *, slot_zero_raises=False, metrics_raises=False, embedder_raises=False
+    ):
         self.events = []
         self.failure_handlers = []
+        self.services = []
+        self.dbs = []
+        self.loads = []
+        self.embedder = HashEmbedder()
+        self.reranker = KeywordReranker()
         events = self.events
         passed_failure_handlers = self.failure_handlers
+        passed_services = self.services
+        dbs = self.dbs
+        loads = self.loads
+        embedder = self.embedder
+        reranker = self.reranker
 
         class FakeDb:
             def __init__(self, url, **kwargs):
-                pass
+                dbs.append(self)
 
             async def open(self):
                 events.append("db.open")
@@ -928,10 +969,21 @@ class _Harness:
             events.append("metrics.start")
             return FakeServer()
 
+        def load_embedder(settings):
+            loads.append(("embedder", settings))
+            if embedder_raises:
+                raise OSError("model files missing")
+            return embedder
+
+        def load_reranker(settings):
+            loads.append(("reranker", settings))
+            return reranker
+
         class FakeWorker:
             def __init__(self, db, handlers, *, failure_handlers=None, services=None, worker_id):
                 self.worker_id = worker_id
                 passed_failure_handlers.append(failure_handlers)
+                passed_services.append(services)
 
             async def run(self, stop):
                 if slot_zero_raises and self.worker_id.endswith(":0"):
@@ -944,6 +996,8 @@ class _Harness:
         monkeypatch.setattr("backend.jobs.worker.Worker", FakeWorker)
         monkeypatch.setattr("backend.obs.metrics_server.start_metrics_server", start_metrics)
         monkeypatch.setattr("backend.obs.logging.configure_logging", lambda level: None)
+        monkeypatch.setattr("backend.models.loader.load_embedder", load_embedder)
+        monkeypatch.setattr("backend.models.loader.load_reranker", load_reranker)
 
 
 async def test_run_worker_waits_for_other_slots_when_one_slot_fails(monkeypatch):
@@ -975,6 +1029,38 @@ async def test_run_worker_passes_the_failure_handlers_to_every_worker(monkeypatc
 
 async def _has(items, count):
     return len(items) >= count
+
+
+async def test_run_worker_builds_one_services_container_from_the_loaded_models(monkeypatch):
+    harness = _Harness(monkeypatch)
+    settings = Settings(worker_concurrency=2)
+
+    task = asyncio.create_task(_run_worker(settings))
+    await _until(lambda: _has(harness.services, 2))
+    os.kill(os.getpid(), signal.SIGINT)
+    await asyncio.wait_for(task, LIMIT_S)
+
+    first, second = harness.services
+    assert first is second
+    assert isinstance(first, Services)
+    assert first.settings is settings
+    assert first.db is harness.dbs[0]
+    assert first.embedder is harness.embedder
+    assert first.reranker is harness.reranker
+    assert sorted(harness.loads, key=lambda load: load[0]) == [
+        ("embedder", settings),
+        ("reranker", settings),
+    ]
+
+
+async def test_run_worker_closes_the_database_when_a_model_fails_to_load(monkeypatch):
+    harness = _Harness(monkeypatch, embedder_raises=True)
+
+    with pytest.raises(OSError, match="model files missing"):
+        await asyncio.wait_for(_run_worker(Settings(worker_concurrency=1)), LIMIT_S)
+
+    assert harness.events == ["db.open", "db.close"]
+    assert harness.services == []
 
 
 async def test_run_worker_closes_the_database_when_the_metrics_server_fails(monkeypatch):
