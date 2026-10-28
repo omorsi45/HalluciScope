@@ -85,3 +85,21 @@ Rulings:
 
 - Task 15: complete (commits 4e7f692..4ec6772; acceptance: 1380 passed, ruff clean, 7 files in scope). For a current-version passage, current_equivalent_passage_id is the passage itself.
 - Task 15: minor (deferred): validate_analysis does no authorization (internal; any HTTP exposure must check analysis visibility first).
+
+- Task 16: complete (commits 4ec6772..da39823; acceptance: 1394 passed, ruff clean, 4 files in scope). Sentence nodes only for sentences with a valid citation; feedback note rejects NUL (422).
+- Task 16: minor (deferred): GET /claims/{id}/checks unpaginated (per brief).
+
+- Ruling: test_unrelated_change_skips_claim, its positive control, and test_new_passage_triggers_recheck use make_test_calibrator(evidence_k=1). Why: with the default evidence_k = 4 a two-document corpus gives every claim fewer than 4 links, so spec R3(b) (thin evidence) correctly flags it and the plan's "no check row" expectation contradicts R3. The spec wins; the trigger logic is unchanged. Cost if wrong: test fixtures only.
+- Task 17: complete (commits da39823..587cf57; acceptance: 1434 passed, ruff clean, 8 files in scope; test_ingest_upload now drains only ingest_upload since reverify_document has a handler).
+- Task 17: minor (deferred): reverify jobs use the default 300 s worker timeout; a retried reverify_document appends duplicate checks (changed=false) for analyses it already handled; no rate limit on POST /analyses/{id}/reverify; claims_to_recheck holds a tenant transaction across reranker scoring.
+
+- Task 18: complete (commits 587cf57..2ae414f; acceptance: 1469 passed, ruff clean, 19 files in scope; legacy routes and tests/test_api.py removed with git rm). Legacy endpoints now require a session and return string ids (frontend updated in Plan D).
+- Task 18: carry-forward to Task 19: cli/main.py keeps _build_pipeline only for the legacy `evaluate` command; remove both with the legacy pipeline.
+- Task 18: minor (deferred): an ingest failure inside a quick check (no_text, bad_encoding) surfaces as 500 in POST /api/analyze per the brief's "500 otherwise"; a 422 would be more accurate.
+
+- Ruling: the legacy `halluciscope evaluate` CLI command and cli/main.py's _build_pipeline were removed with the legacy pipeline in Task 19. Why: they only drove the deleted pipeline and evaluation/benchmarks.py, whose metrics spec section 4 found invalid; spec 4's "preserved Typer CLI" names are superseded by the benchmark entry points `python -m evaluation.run_*`. Cost if wrong: a thin `evaluate` alias can be added in Plan D.
+- Task 19: complete (commits 2ae414f..e424e8f; acceptance: 1441 passed, 0 warnings, ruff clean; 44 files incl. deletions; no remaining imports of deleted modules; langchain-text-splitters and aiosqlite removed from pyproject and the WSL venv).
+- Task 19: minor (deferred): README still documents the old architecture and `evaluate` (Plan D Task 16 rewrites it); Settings.consistency_samples kept but unused (requests use options.consistency_samples); .gitignore keeps legacy lines (evaluation/datasets/*.json, *.db, *.sqlite); tests/conftest.py starts with a blank line.
+
+- Task 20: complete (commits e424e8f..95951b3; acceptance: 1462 passed, ruff clean, 3 files in scope). Bootstrap draws from np.unique(groups) (sorted), so intervals do not depend on row order.
+- ENV: full suite 250-370 s; other WSL workloads (a kind Kubernetes cluster and Go race tests from other projects) share the CPU; test_env_isolation's child pytest takes up to 93 s. Inner limit 900 s still has margin.
