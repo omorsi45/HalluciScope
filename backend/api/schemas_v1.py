@@ -256,6 +256,34 @@ class PassageBoundaryOut(BaseModel):
     section: str | None
 
 
+class PassageOut(BaseModel):
+    """A passage as stored in its own version, with its surroundings and its standing today.
+
+    Mirrors ``backend.provenance.resolve.ResolvedPassage``. The context fields are up to 300
+    characters of that version's text on each side.
+    """
+
+    passage_id: UUID
+    version_id: UUID
+    version_number: int
+    effective_from: datetime
+    document_id: UUID
+    document_title: str
+    text: str
+    start_char: int
+    end_char: int
+    page_start: int | None
+    page_end: int | None
+    context_before: str
+    context_after: str
+    is_current_version: bool
+    current_equivalent_passage_id: UUID | None  # same text in the current version, if any
+    superseded_by_version: int | None  # the current version number when it is not this one
+    collection_id: UUID
+    ordinal: int
+    section: str | None
+
+
 class DiffHunkOut(BaseModel):
     op: Literal["equal", "insert", "delete", "replace"]
     from_start: int
