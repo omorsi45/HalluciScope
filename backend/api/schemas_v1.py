@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AfterValidator, AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AfterValidator,
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+)
 
 from backend.retrieval.types import SearchMode
 
@@ -47,6 +55,21 @@ Title = Annotated[
 SearchQuery = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=2000),
+    _NO_SURROGATES,
+    _NO_NUL,
+]
+AskQuestion = SearchQuery
+# A verify question is optional context: it may be empty, and the route stores that as none.
+VerifyQuestion = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, max_length=2000),
+    _NO_SURROGATES,
+    _NO_NUL,
+]
+# The answer is stored exactly as sent: claim offsets point into it.
+Answer = Annotated[
+    str,
+    StringConstraints(min_length=1, max_length=20000),
     _NO_SURROGATES,
     _NO_NUL,
 ]
@@ -285,3 +308,147 @@ class SearchOut(BaseModel):
     mode: str
     reranked: bool
     took_ms: int
+
+
+class AnalysisOptionsIn(BaseModel):
+    extraction: Literal["llm_atomic", "sentence"] = "llm_atomic"
+    consistency_samples: int = Field(default=0, ge=0, le=5)
+
+
+class AskIn(BaseModel):
+    question: AskQuestion
+    collection_ids: list[UUID] | None = None
+    as_of: AwareDatetime | None = None
+    options: AnalysisOptionsIn = Field(default_factory=AnalysisOptionsIn)
+
+
+class VerifyIn(BaseModel):
+    answer: Answer
+    question: VerifyQuestion | None = None
+    collection_ids: list[UUID] | None = None
+    as_of: AwareDatetime | None = None
+    options: AnalysisOptionsIn = Field(default_factory=AnalysisOptionsIn)
+
+    @field_validator("options")
+    @classmethod
+    def _no_self_consistency(cls, options: AnalysisOptionsIn) -> AnalysisOptionsIn:
+        # Self-consistency resamples the answer generation, which a verify request does not have.
+        if options.consistency_samples != 0:
+            raise ValueError("consistency_samples must be 0 when verifying a given answer")
+        return options
+
+
+class AnalysisAcceptedOut(BaseModel):
+    analysis_id: UUID
+    status: str
+
+
+class AnalysisSummaryOut(BaseModel):
+    id: UUID
+    kind: str
+    question_preview: str | None  # the first 200 characters of the question
+    status: str
+    error_code: str | None
+    live: bool  # true when the analysis reads the current documents (no as_of)
+    as_of: datetime | None
+    created_at: datetime
+    completed_at: datetime | None
+    summary: dict
+    changed_since: bool  # some re-verification of one of its claims changed the verdict
+
+
+class NLIOut(BaseModel):
+    entail: float | None
+    contra: float | None
+    neutral: float | None
+
+
+class EvidenceOut(BaseModel):
+    """One passage cited for or against a claim.
+
+    When the viewer can no longer read the passage's collection, `redacted` is true and the
+    source material (text, span text, document, version number, dates, pages) is null. The ids,
+    relation, rank, and NLI numbers stay.
+    """
+
+    passage_id: UUID
+    version_id: UUID
+    document_id: UUID | None
+    document_title: str | None
+    version_number: int | None
+    effective_from: datetime | None
+    page_start: int | None
+    page_end: int | None
+    relation: str
+    rank: int
+    span_start: int
+    span_end: int
+    nli: NLIOut
+    rerank_score: float | None
+    text: str | None
+    span_text: str | None  # the version text between span_start and span_end
+    passage_is_current: bool | None
+    redacted: bool
+
+
+class ClaimCheckOut(BaseModel):
+    id: UUID
+    reason: str
+    verdict: str
+    probs: dict[str, float]
+    changed: bool
+    checked_version_ids: list[UUID]
+    created_at: datetime
+
+
+class ClaimOut(BaseModel):
+    id: UUID
+    ordinal: int
+    text: str
+    answer_start: int
+    answer_end: int
+    extraction_method: str
+    verdict: str
+    probs: dict[str, float]
+    features: dict[str, float]
+    diagnostics: dict
+    conflict: bool  # at least one supporting and one contradicting evidence item
+    evidence: list[EvidenceOut]
+    latest_check: ClaimCheckOut | None
+
+
+class CitationOut(BaseModel):
+    """A `[P#]` marker of the answer; redacted like evidence when its collection is unreadable."""
+
+    number: int
+    marker_start: int
+    marker_end: int
+    sentence_start: int
+    sentence_end: int
+    status: str
+    passage_id: UUID | None
+    version_id: UUID | None
+    document_title: str | None
+    version_number: int | None
+    redacted: bool
+
+
+class AnalysisOut(BaseModel):
+    id: UUID
+    kind: str
+    question: str | None
+    answer: str | None
+    status: str
+    error_code: str | None
+    progress: dict
+    live: bool
+    as_of: datetime | None
+    known_at: datetime
+    collection_ids: list[UUID]
+    created_at: datetime
+    completed_at: datetime | None
+    config: dict
+    timings: dict
+    summary: dict
+    claims: list[ClaimOut]
+    citations: list[CitationOut]

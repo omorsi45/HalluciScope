@@ -8,6 +8,7 @@ from backend.api.middleware import (
     SecurityHeadersMiddleware,
     UnhandledErrorMiddleware,
 )
+from backend.api.routes.analyses import router as analyses_router
 from backend.api.routes.analysis import router as analysis_router
 from backend.api.routes.api_keys import router as api_keys_router
 from backend.api.routes.auth import router as auth_router
@@ -61,6 +62,7 @@ def create_app(settings: Settings | None = None, lifespan=None) -> FastAPI:
     v1.include_router(collections_router, prefix="/collections")
     v1.include_router(documents_router)
     v1.include_router(search_router)
+    v1.include_router(analyses_router)
     v1.include_router(members_router, prefix="/tenants/current")
     app.include_router(v1, prefix="/api/v1")
 
