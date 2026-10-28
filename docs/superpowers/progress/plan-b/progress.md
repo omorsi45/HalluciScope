@@ -97,3 +97,20 @@ Rulings:
 - Task 14: minor (deferred): HNSW can leave outlier vectors unreachable even with iterative scan (exact mode is the fallback; benchmark reports dense vs dense_exact).
 
 - Task 15: complete (commits 74380f7..239e120; acceptance: 887 passed, ruff clean, 3 files in scope)
+
+- Task 16: complete (commits 239e120..d55301a; acceptance: 901 passed, ruff clean, 2 files in scope). BM25/FTS run before dense in one transaction; 11 mutations each caught.
+
+- Task 17: complete (commits d55301a..ca8eb87; acceptance: 941 passed, ruff clean, 10 files in scope incl. registry and startup test updates). search handler + failure hook registered; API lifespan loads the embedder (tests patch load_embedder).
+- Ruling: the search route also deletes the search_requests row on failed and on timeout, not only after done. Why: R4 wants query text out of storage as soon as it is not needed; a timed-out job then finds no row and is a no-op. Cost if wrong: no failed-row trail for debugging (job row keeps ids and error code).
+- Task 17: minor (deferred): a client that disconnects mid-wait leaves its row until the next search job in that tenant sweeps rows older than 1 hour; importing backend.api.startup still pulls torch through the legacy core (Plan C Task 19 deletes it).
+
+- Task 18: complete (commits ca8eb87..2d41a6f; acceptance: 972 passed, ruff clean, 3 files in scope; nDCG literal hand-checked by controller)
+
+- Task 19: complete (commits 2d41a6f..0aea26b; acceptance: 997 passed, ruff clean, 4 files in scope; evaluation/data/ ignored). Pinned sha256: scifact 536e1444...0165 (2,816,079 B), nfcorpus efe5be03...1b0b (2,448,432 B), ragtruth_response e4c2e4ac...8073 (21,458,735 B), ragtruth_source 0dffc26e...578b (15,117,971 B). Real data: SciFact 5183 docs / 300 test queries, NFCorpus 3633 / 323 (match spec 20.1).
+- Task 19: carry-forward to Plan C: RAGTruth files are stored side by side as evaluation/data/response.jsonl and evaluation/data/source_info.jsonl; load_beir accepts the parent or inner folder.
+
+- Task 20: complete (commits 0aea26b..05a6b40; acceptance: 1016 passed, ruff clean, 4 files in scope). Env collection portable (R-B2); git fields null when git cannot run.
+- Task 21: run by a Sonnet runner from an exact brief (no code changes). Controller prep: created and migrated evidencegraph_bench in eg-pg; .local/wsl-git.sh gives WSL git a working env on this Windows worktree (GIT_DIR/GIT_WORK_TREE, autocrlf, GIT_OPTIONAL_LOCKS=0 so no index writes). The earlier CPU contention was gone (load 1.0) before the runs.
+- Task 21: complete (commits 05a6b40..f68c2ac). Controller verification: re-rendered docs/results/retrieval.md from the raw results JSON and diffed: identical; commit holds exactly docs/results/retrieval.md and evaluation/manifests/beir.json; manifest hashes equal REGISTRY. Results commit 05a6b403 clean. SciFact bm25 nDCG@10 0.6686 (published flat BM25 about 0.665), hybrid 0.7230, hybrid_rerank 0.7006; NFCorpus bm25 0.3211, hybrid 0.3596, hybrid_rerank 0.3504. acl_leaks 0 and parity 7.1e-15 / 3.6e-15. Runtimes 726 s and 666 s. Reranking lowers nDCG on both datasets and is published as measured.
+- Task 21: minor (deferred): the env block shows RAM visible to WSL (15.2 GB of about 31 GB) and does not name WSL2; README/evaluation docs (Plan D) must state the runs were on WSL2 Ubuntu 24.04, CPU only.
+- PLAN B COMPLETE: 21 tasks, range 536b023..f68c2ac (plus fix a57dbb2 inside). Parked for the final fix wave: section-path memory amplification (Task 5), migration checksum vs CRLF (Task 7), NUL in shared request strings returns 500 (Task 11).
