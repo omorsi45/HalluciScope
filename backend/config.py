@@ -6,6 +6,10 @@ class Settings(BaseSettings):
     ollama_base_url: str = "http://localhost:11434"
     ollama_model: str = "llama3.1:8b"
 
+    # EvidenceGraph LLM client (answer generation and claim extraction)
+    llm_model: str = "llama3.2:3b"
+    llm_timeout_s: float = 120.0
+
     # Models
     nli_model_name: str = "cross-encoder/nli-deberta-v3-large"
     embedding_model_name: str = "sentence-transformers/all-MiniLM-L6-v2"

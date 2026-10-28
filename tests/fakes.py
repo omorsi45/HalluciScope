@@ -1,12 +1,13 @@
-"""Deterministic stand-ins for the embedding and reranking models.
+"""Deterministic stand-ins for the embedding and reranking models, and a scripted LLM.
 
-Neither fake uses Python's `hash`, which is randomized per process, so vectors and scores
-are identical across runs and across processes.
+The embedding and reranking fakes do not use Python's `hash`, which is randomized per
+process, so vectors and scores are identical across runs and across processes.
 """
 
 import hashlib
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import numpy as np
 
@@ -57,3 +58,40 @@ class KeywordReranker:
     def score(self, query: str, passages: Sequence[str]) -> list[float]:
         query_tokens = set(_tokens(query))
         return [float(len(query_tokens & set(_tokens(passage)))) for passage in passages]
+
+
+
+class ScriptedLLM:
+    """LLM client fake: replies come from `responses` in order, then from `default`.
+
+    A response that is an Exception is raised instead of returned, so tests can script
+    failures. Every call is recorded in `calls`, including the ones that raise.
+    """
+
+    def __init__(self, model_id: str = "fake-llm") -> None:
+        self.model_id = model_id
+        self.responses: list[str | Exception] = []
+        self.default: Callable[[Sequence[Mapping[str, str]]], str] = lambda messages: ""
+        self.calls: list[dict[str, Any]] = []
+
+    async def chat(
+        self,
+        messages: Sequence[Mapping[str, str]],
+        *,
+        temperature: float = 0.0,
+        json_schema: Mapping[str, Any] | None = None,
+        timeout_s: float | None = None,
+    ) -> str:
+        self.calls.append(
+            {
+                "messages": [dict(message) for message in messages],
+                "temperature": temperature,
+                "json_schema": json_schema,
+            }
+        )
+        if not self.responses:
+            return self.default(messages)
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
