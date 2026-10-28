@@ -115,3 +115,13 @@ Rulings:
 
 - Task 24: attempt 1 interrupted by the session before any code (notes only). Attempt 2 complete (commits f955150..79ae886; acceptance: 1602 passed, ruff clean, 3 files in scope). Runner adds --database-url and --data-root (atomic subset); refuses an artifact whose manifest_hash or models differ from the cache.
 - Task 24: carry-forward to Task 27: run run_factuality through .local/wsl-git.sh so git_commit is recorded; real-scale bootstrap time unmeasured; evaluation/AGENTS.md command list to update in Plan D docs.
+
+- Ruling: cross_tenant_links in run_temporal is measured by reading tenant B's passage ids inside B's tenant transaction and matching them against tenant A's evidence_links inside A's, not "as eg_owner". Why: RLS is forced and eg_owner has no BYPASSRLS, so an owner-level count sees zero rows and would always print a vacuous 0 (verified: 26,398 passages as postgres, 0 as eg_owner). A test fabricates a cross-tenant link and the count goes 0 to 1. Cost if wrong: none; the measurement is stricter.
+- Ruling: predicted source change in run_temporal = latest verdict (newest re-check, else original) differs from the original verdict, matching the gold definition (gold at the last version vs v1). The brief's literal "latest claim_checks.changed" compares only consecutive checks and would mismeasure three-version families. Cost if wrong: a two-line change.
+- Task 25: complete (commits 79ae886..97047a0; acceptance: 1637 passed, ruff clean, 4 files in scope). Bench users get the CLI's locked password hash but are not disabled (principal_for_user returns None for disabled users, which would suppress re-verification).
+- Task 25: carry-forward to Task 27: migrate evidencegraph_bench to head (0004 not applied there yet) before any Plan C benchmark run.
+
+- Task 26: complete (commits 97047a0..eab71d9; acceptance: 1654 passed, ruff clean, 3 files in scope). Nearest-rank percentiles; failures excluded from stage stats; no warm-up request (first request affects mean only at n = 50).
+
+- Pre-Task 27 spike (controller, scratch .local/nli_spike.py, synthetic pairs, low load): DeBERTa-v3-large CPU fp32 batch 16, 12 threads: unsorted 3.69 pairs/s, length-sorted 5.11 (+38%); batch 32 sorted 4.15; bf16 autocast 9.13 (not adopted: spec 13 says fp32; offer to Omar).
+- Fix: c383a19 perf: batch NLI pairs by length to cut padding (DebertaNLIScorer sorts by characters, longest first, restores input order). Acceptance: 1656 passed, ruff clean, models tests 3 passed.
