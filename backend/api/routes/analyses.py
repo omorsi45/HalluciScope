@@ -1,9 +1,9 @@
-"""Ask, verify, and analysis read routes under /api/v1.
+"""Ask, verify, and analysis read routes under /api/v1, plus claim feedback and claim checks.
 
-An analysis is visible to its creator and to tenant owners and admins (R8). Reading one
-withholds the source material (passage text, spans, document and version details) of every
-collection the viewer can no longer read, and marks each such evidence item and citation
-`redacted`. Question and answer text is never logged here.
+An analysis is visible to its creator and to tenant owners and admins (R8). A claim is visible
+exactly when its analysis is. Reading one withholds the source material (passage text, spans,
+document and version details) of every collection the viewer can no longer read, and marks
+each such evidence item and citation `redacted`. Question and answer text is never logged here.
 """
 
 from collections.abc import Mapping, Sequence
@@ -31,6 +31,9 @@ from backend.api.schemas_v1 import (
     ClaimCheckOut,
     ClaimOut,
     EvidenceOut,
+    FeedbackIn,
+    FeedbackOut,
+    GraphOut,
     NLIOut,
     VerifyIn,
 )
@@ -39,6 +42,7 @@ from backend.auth.service import Principal
 from backend.authz.policy import is_tenant_admin, readable_subset, require_analysis
 from backend.db.pool import Database
 from backend.db.repos import analyses
+from backend.provenance.graph import build_graph, passage_collection_ids
 
 router = APIRouter()
 
@@ -167,6 +171,75 @@ async def get_analysis(
             for citation in citations
         ],
     )
+
+
+@router.get("/analyses/{analysis_id}/graph", response_model=GraphOut)
+async def get_analysis_graph(
+    analysis_id: UUID,
+    principal: Principal = Depends(current_principal),
+    db: Database = Depends(get_db),
+) -> dict[str, list[dict[str, Any]]]:
+    async with db.tenant_tx(principal.tenant_id) as conn:
+        await require_analysis(conn, principal, analysis_id)
+        collection_ids = await passage_collection_ids(conn, analysis_id)
+        readable = await readable_subset(conn, principal, collection_ids)
+        return await build_graph(conn, analysis_id, readable)
+
+
+@router.post("/claims/{claim_id}/feedback", response_model=FeedbackOut, status_code=201)
+async def post_feedback(
+    claim_id: UUID,
+    body: FeedbackIn,
+    principal: Principal = Depends(current_principal),
+    db: Database = Depends(get_db),
+) -> FeedbackOut:
+    async with db.tenant_tx(principal.tenant_id) as conn:
+        claim = await _require_claim(conn, principal, claim_id)
+        feedback_id = await analyses.upsert_feedback(
+            conn,
+            tenant_id=claim["tenant_id"],
+            claim_id=claim_id,
+            user_id=principal.user_id,
+            label=body.label,
+            note=body.note,
+        )
+    return FeedbackOut(id=feedback_id)
+
+
+@router.get("/claims/{claim_id}/checks", response_model=list[ClaimCheckOut])
+async def list_claim_checks(
+    claim_id: UUID,
+    principal: Principal = Depends(current_principal),
+    db: Database = Depends(get_db),
+) -> list[ClaimCheckOut]:
+    async with db.tenant_tx(principal.tenant_id) as conn:
+        await _require_claim(conn, principal, claim_id)
+        cur = await conn.execute(
+            "select id, reason, verdict, p_supported, p_contradicted, p_insufficient, changed, "
+            "checked_version_ids, created_at from claim_checks where claim_id = %s "
+            "order by created_at desc, id desc",
+            (claim_id,),
+        )
+        rows = await cur.fetchall()
+    return [_check_out(row) for row in rows]
+
+
+async def _require_claim(
+    conn: AsyncConnection, principal: Principal, claim_id: UUID
+) -> dict[str, Any]:
+    """The claim row when its analysis is visible to the caller, else 404 ``claim_not_found``."""
+    cur = await conn.execute(
+        "select id, tenant_id, analysis_id from claims where id = %s", (claim_id,)
+    )
+    claim = await cur.fetchone()
+    if claim is None:
+        raise ApiError(404, "claim_not_found", "Claim not found")
+    try:
+        await require_analysis(conn, principal, claim["analysis_id"])
+    except ApiError as exc:
+        # The analysis rule decides; the caller learns only that the claim is not theirs.
+        raise ApiError(404, "claim_not_found", "Claim not found") from exc
+    return claim
 
 
 def _summary_out(row: Mapping[str, Any], changed: bool) -> AnalysisSummaryOut:

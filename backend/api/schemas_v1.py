@@ -66,6 +66,13 @@ VerifyQuestion = Annotated[
     _NO_SURROGATES,
     _NO_NUL,
 ]
+# A feedback note may be empty; NUL is rejected like in the other free text a row stores.
+FeedbackNote = Annotated[
+    str,
+    StringConstraints(max_length=1000),
+    _NO_SURROGATES,
+    _NO_NUL,
+]
 # The answer is stored exactly as sent: claim offsets point into it.
 Answer = Annotated[
     str,
@@ -459,6 +466,37 @@ class CitationOut(BaseModel):
     document_title: str | None
     version_number: int | None
     redacted: bool
+
+
+class FeedbackIn(BaseModel):
+    label: Literal["correct", "incorrect"]
+    note: FeedbackNote | None = None
+
+
+class FeedbackOut(BaseModel):
+    id: UUID
+
+
+class GraphNodeOut(BaseModel):
+    """One node of the evidence graph; `label` and `data` are withheld for a redacted passage."""
+
+    id: str  # claim:<uuid>, sentence:<start>:<end>, passage:<uuid>, version:<uuid>, document:<uuid>
+    type: Literal["claim", "sentence", "passage", "version", "document"]
+    label: str | None
+    data: dict
+
+
+class GraphEdgeOut(BaseModel):
+    source: str
+    target: str
+    type: Literal[
+        "supports", "contradicts", "related", "cites", "part_of", "version_of", "superseded_by"
+    ]
+
+
+class GraphOut(BaseModel):
+    nodes: list[GraphNodeOut]
+    edges: list[GraphEdgeOut]
 
 
 class AnalysisOut(BaseModel):
