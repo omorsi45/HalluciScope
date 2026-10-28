@@ -8,10 +8,12 @@
         --out docs/results/factuality.md --figures docs/results/figures
     python -m evaluation.report temporal evaluation/results/temporal.json \
         --out docs/results/temporal.md
+    python -m evaluation.report latency evaluation/results/latency.json \
+        --out docs/results/latency.md
 
 Every number in the output is read from a results file written by ``evaluation.run_retrieval``,
-``evaluation.run_factuality`` or ``evaluation.run_temporal``; nothing is computed or filled in
-here beyond rounding.
+``evaluation.run_factuality``, ``evaluation.run_temporal`` or ``evaluation.run_latency``;
+nothing is computed or filled in here beyond rounding.
 """
 
 import argparse
@@ -530,6 +532,61 @@ def render_temporal(results: Mapping[str, Any]) -> str:
     return "\n\n".join(sections) + "\n"
 
 
+_LATENCY_INTRO = (
+    "End-to-end latency of ask analyses over the documents of the synthetic temporal corpus. "
+    "Each request retrieves passages, has the LLM write a cited answer, extracts its claims "
+    "and verifies them, in one process and one request after another. A stage's time is its "
+    "entry in the analysis's recorded timings, and the total covers the whole run. "
+    "Percentiles are nearest-rank, so each one is an observed time."
+)
+
+
+def render_latency(results: Mapping[str, Any]) -> str:
+    """The end-to-end latency benchmark as markdown."""
+    env, models = results["env"], results["models"]
+    failures = results["failures"]
+    n_failed = sum(failures.values())
+    by_code = ", ".join(f"{code} {count}" for code, count in failures.items())
+    requests = f"- Requests: {results['n']}, failed: {n_failed}" + (
+        f" ({by_code})" if failures else ""
+    )
+    if results["stages"]:
+        table = [
+            "| Stage | p50 s | p95 s | mean s |",
+            "| --- | ---: | ---: | ---: |",
+            *(
+                f"| {stage} | {stats['p50_s']:.3f} | {stats['p95_s']:.3f} | {stats['mean_s']:.3f} |"
+                for stage, stats in results["stages"].items()
+            ),
+        ]
+        if failures:
+            table += [
+                "",
+                "The statistics cover the requests that succeeded; failed requests are excluded.",
+            ]
+    else:
+        table = ["No request succeeded, so no latency was measured."]
+
+    sections = [
+        "# End-to-end latency benchmark\n\n" + _LATENCY_INTRO,
+        "\n".join(
+            [
+                "## Environment",
+                "",
+                _commit_line(env),
+                f"- CPU: {_text(env.get('cpu'))}, RAM: {_text(env.get('ram_gb'), ' GB')}",
+                f"- Python: {_text(env.get('python'))}, torch: {_text(env.get('torch'))}, "
+                f"PostgreSQL: {_text(env.get('postgres'))}, pgvector: "
+                f"{_text(env.get('pgvector'))}",
+                f"- Models: LLM {models['llm']}, NLI {models['nli']}, "
+                f"embedder {models['embedder']}, reranker {models['reranker']}",
+            ]
+        ),
+        "\n".join(["## Latency by stage", "", requests, "", *table]),
+    ]
+    return "\n\n".join(sections) + "\n"
+
+
 def _write_markdown(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # newline="\n": the committed file uses LF whatever the platform.
@@ -551,6 +608,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     temporal = commands.add_parser("temporal", help="render the synthetic temporal results")
     temporal.add_argument("results", type=Path, help="results JSON of run_temporal")
     temporal.add_argument("--out", type=Path, default=Path("docs/results/temporal.md"))
+    latency = commands.add_parser("latency", help="render the end-to-end latency results")
+    latency.add_argument("results", type=Path, help="results JSON of run_latency")
+    latency.add_argument("--out", type=Path, default=Path("docs/results/latency.md"))
     args = parser.parse_args(argv)
 
     if args.command == "retrieval":
@@ -561,6 +621,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "temporal":
         temporal_results = json.loads(args.results.read_text(encoding="utf-8"))
         _write_markdown(args.out, render_temporal(temporal_results))
+        return 0
+
+    if args.command == "latency":
+        latency_results = json.loads(args.results.read_text(encoding="utf-8"))
+        _write_markdown(args.out, render_latency(latency_results))
         return 0
 
     def read(path: Path | None) -> Any:
