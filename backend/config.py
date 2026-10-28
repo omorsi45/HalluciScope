@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     nli_model: str = "cross-encoder/nli-deberta-v3-large"
     nli_batch_size: int = 16
 
+    # EvidenceGraph calibrator artifact (the worker refuses analyses when it is missing)
+    calibrator_path: str = "backend/calibration/artifacts/default.json"
+
     # Ingestion limits
     max_upload_bytes: int = 20_971_520
     parse_timeout_s: float = 60.0

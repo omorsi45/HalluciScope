@@ -1,4 +1,5 @@
-"""Deterministic stand-ins for the embedding, reranking and NLI models, and a scripted LLM.
+"""Deterministic stand-ins for the embedding, reranking and NLI models, a scripted LLM, and a
+calibrator fixture that matches the model ids of these fakes.
 
 The embedding and reranking fakes do not use Python's `hash`, which is randomized per
 process, so vectors and scores are identical across runs and across processes.
@@ -11,7 +12,9 @@ from typing import Any
 
 import numpy as np
 
+from backend.calibration.artifact import Calibrator
 from backend.verify.claims import STOPWORDS
+from backend.verify.features import FEATURE_NAMES
 from backend.verify.types import NLIResult
 
 _TOKEN = re.compile(r"\w+")
@@ -140,3 +143,45 @@ class ScriptedLLM:
         if isinstance(response, Exception):
             raise response
         return response
+
+
+def make_test_calibrator(
+    *,
+    tau_s: float = 0.5,
+    tau_c: float = 0.5,
+    evidence_k: int = 4,
+    models: dict | None = None,
+) -> Calibrator:
+    """A calibrator whose verdicts follow the NLI extremes, for tests that need no training.
+
+    All 12 features, no standardization. Strong entailment (`max_entail`) pushes supported,
+    strong contradiction (`max_contra`) pushes contradicted, and the insufficient bias of 3
+    wins when both are near zero. `models` entries override the ids of the fakes in this file.
+    """
+    W = np.zeros((3, len(FEATURE_NAMES)))
+    W[0, FEATURE_NAMES.index("max_entail")] = 8.0
+    W[1, FEATURE_NAMES.index("max_contra")] = 8.0
+    return Calibrator(
+        feature_names=FEATURE_NAMES,
+        mean=np.zeros(len(FEATURE_NAMES)),
+        std=np.ones(len(FEATURE_NAMES)),
+        W=W,
+        b=np.array([0.0, 0.0, 3.0]),
+        temperature=1.0,
+        tau_s=tau_s,
+        tau_c=tau_c,
+        alpha_s=0.10,
+        alpha_c=0.05,
+        delta=0.05,
+        unit="sentence",
+        premise_mode="passage",
+        evidence_k=evidence_k,
+        candidates=20,
+        models={
+            "nli": RuleNLIScorer.model_id,
+            "embedder": HashEmbedder.model_id,
+            "reranker": KeywordReranker.model_id,
+            **(models or {}),
+        },
+        metadata={},
+    )
