@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     # EvidenceGraph calibrator artifact (the worker refuses analyses when it is missing)
     calibrator_path: str = "backend/calibration/artifacts/default.json"
 
+    # EvidenceGraph analyses: the run limit, and how many one user may have queued or running
+    analysis_timeout_s: float = 300.0
+    max_active_analyses: int = 3
+
     # Ingestion limits
     max_upload_bytes: int = 20_971_520
     parse_timeout_s: float = 60.0

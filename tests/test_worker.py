@@ -9,6 +9,7 @@ import sys
 from contextlib import contextmanager
 from pathlib import Path
 
+import httpx
 import pytest
 from typer.testing import CliRunner
 
@@ -25,7 +26,7 @@ from backend.jobs.worker import (
 from backend.obs.logging import JsonFormatter
 from backend.obs.metrics import JOB_DURATION, JOBS
 from backend.services import Services
-from tests.fakes import HashEmbedder, KeywordReranker
+from tests.fakes import HashEmbedder, KeywordReranker, RuleNLIScorer, make_test_calibrator
 
 LIMIT_S = 10.0
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -83,15 +84,17 @@ async def _noop(ctx: JobContext):
     return None
 
 
-def test_registries_register_the_ingest_and_search_jobs_with_their_failure_hooks():
-    assert set(build_handlers(None)) == {"ingest_upload", "search"}
-    assert set(build_failure_handlers(None)) == {"ingest_upload", "search"}
+def test_registries_register_the_ingest_search_and_analysis_jobs_with_their_failure_hooks():
+    kinds = {"ingest_upload", "search", "run_analysis"}
+    assert set(build_handlers(None)) == kinds
+    assert set(build_failure_handlers(None)) == kinds
 
 
 def test_worker_import_paths_do_not_load_ml_libraries():
     # The worker and API import these modules; only calling a model loader may load torch.
     code = (
         "import json, sys; import backend.cli.main, backend.jobs.registry, "
+        "backend.analysis.service, backend.analysis.handlers, "
         "backend.ingest.handlers, backend.ingest.intake, backend.retrieval.handlers, "
         "backend.api.app, backend.api.routes.search; "
         "print(json.dumps([m for m in ('torch', 'sentence_transformers', 'transformers') "
@@ -926,26 +929,37 @@ def test_worker_command_rejects_concurrency_below_one(monkeypatch):
 class _Harness:
     """Fakes for everything _run_worker opens, recording the order of events.
 
-    The model loaders are faked too, so no test here can download or load a real model.
+    The model loaders and the Ollama client are faked too, so no test here can download or load a
+    real model or reach the network. The calibrator path points at a missing file unless a test
+    sets `calibrator_path` itself, so a committed default artifact never reaches these tests.
     """
 
     def __init__(
         self, monkeypatch, *, slot_zero_raises=False, metrics_raises=False, embedder_raises=False
     ):
+        monkeypatch.setenv("HALLUCISCOPE_CALIBRATOR_PATH", "/nonexistent/calibrator.json")
         self.events = []
         self.failure_handlers = []
+        self.timeouts = []
         self.services = []
         self.dbs = []
         self.loads = []
+        self.nli_loads = []
+        self.llms = []
         self.embedder = HashEmbedder()
         self.reranker = KeywordReranker()
+        self.nli = RuleNLIScorer()
         events = self.events
         passed_failure_handlers = self.failure_handlers
+        passed_timeouts = self.timeouts
         passed_services = self.services
         dbs = self.dbs
         loads = self.loads
+        nli_loads = self.nli_loads
+        llms = self.llms
         embedder = self.embedder
         reranker = self.reranker
+        nli = self.nli
 
         class FakeDb:
             def __init__(self, url, **kwargs):
@@ -980,16 +994,42 @@ class _Harness:
             loads.append(("reranker", settings))
             return reranker
 
+        def load_nli(settings):
+            nli_loads.append(settings)
+            return nli
+
+        class FakeOllama:
+            model_id = "fake-ollama"
+
+            def __init__(self, http, base_url, model, *, timeout_s):
+                self.http = http
+                self.base_url = base_url
+                self.model = model
+                self.timeout_s = timeout_s
+                llms.append(self)
+
         class FakeWorker:
-            def __init__(self, db, handlers, *, failure_handlers=None, services=None, worker_id):
+            def __init__(
+                self,
+                db,
+                handlers,
+                *,
+                failure_handlers=None,
+                services=None,
+                timeouts_s=None,
+                worker_id,
+            ):
                 self.worker_id = worker_id
                 passed_failure_handlers.append(failure_handlers)
+                passed_timeouts.append(timeouts_s)
                 passed_services.append(services)
 
             async def run(self, stop):
                 if slot_zero_raises and self.worker_id.endswith(":0"):
                     raise RuntimeError("boom")
-                await stop.wait()
+                # Bounded: a test whose worker is never stopped (for example a RED run of the
+                # CLI tests, which have no SIGINT) fails after LIMIT_S instead of hanging.
+                await asyncio.wait_for(stop.wait(), LIMIT_S)
                 await asyncio.sleep(0.05)
                 events.append(f"slot{self.worker_id[-1]}.stopped")
 
@@ -999,6 +1039,8 @@ class _Harness:
         monkeypatch.setattr("backend.obs.logging.configure_logging", lambda level: None)
         monkeypatch.setattr("backend.models.loader.load_embedder", load_embedder)
         monkeypatch.setattr("backend.models.loader.load_reranker", load_reranker)
+        monkeypatch.setattr("backend.models.loader.load_nli", load_nli)
+        monkeypatch.setattr("backend.llm.client.OllamaClient", FakeOllama)
 
 
 async def test_run_worker_waits_for_other_slots_when_one_slot_fails(monkeypatch):
@@ -1093,3 +1135,104 @@ async def test_run_worker_skips_the_metrics_server_without_a_token(monkeypatch, 
     assert [r.getMessage() for r in caplog.records if r.name == "backend.cli.main"] == [
         "worker metrics disabled"
     ]
+
+
+async def _run_until_workers_start(harness, settings, count):
+    """Run _run_worker until `count` workers exist, then stop it with SIGINT."""
+    task = asyncio.create_task(_run_worker(settings))
+    await _until(lambda: _has(harness.failure_handlers, count))
+    os.kill(os.getpid(), signal.SIGINT)
+    await asyncio.wait_for(task, LIMIT_S)
+
+
+async def test_run_worker_gives_run_analysis_the_analysis_timeout_plus_a_grace_period(monkeypatch):
+    harness = _Harness(monkeypatch)
+    settings = Settings(worker_concurrency=2, analysis_timeout_s=42.5)
+
+    await _run_until_workers_start(harness, settings, 2)
+
+    assert harness.timeouts == [{"run_analysis": 72.5}, {"run_analysis": 72.5}]
+
+
+async def test_run_worker_builds_the_llm_nli_and_calibrator_into_the_services(
+    monkeypatch, tmp_path
+):
+    harness = _Harness(monkeypatch)
+    artifact = tmp_path / "calibrator.json"
+    make_test_calibrator().save(artifact)
+    settings = Settings(
+        worker_concurrency=2,
+        calibrator_path=str(artifact),
+        ollama_base_url="http://ollama.test:11434",
+        llm_model="test-model",
+        llm_timeout_s=7.5,
+    )
+
+    await _run_until_workers_start(harness, settings, 2)
+
+    (llm,) = harness.llms
+    first, second = harness.services
+    assert first is second
+    assert first.llm is llm
+    assert (llm.base_url, llm.model, llm.timeout_s) == (
+        "http://ollama.test:11434",
+        "test-model",
+        7.5,
+    )
+    assert first.nli is harness.nli
+    assert harness.nli_loads == [settings]
+    assert first.calibrator.to_dict() == make_test_calibrator().to_dict()
+    # The HTTP client behind the LLM is closed on shutdown.
+    assert isinstance(llm.http, httpx.AsyncClient)
+    assert llm.http.is_closed
+
+
+async def test_run_worker_leaves_the_calibrator_unset_when_the_artifact_file_is_missing(
+    monkeypatch, tmp_path
+):
+    harness = _Harness(monkeypatch)
+    settings = Settings(worker_concurrency=1, calibrator_path=str(tmp_path / "missing.json"))
+
+    await _run_until_workers_start(harness, settings, 1)
+
+    assert harness.services[0].calibrator is None
+
+
+def _write_rejected_artifact(path, artifact):
+    if artifact == "mismatch":
+        make_test_calibrator(models={"nli": "other-nli"}).save(path)
+    elif artifact == "malformed":
+        data = make_test_calibrator().to_dict()
+        del data["temperature"]
+        path.write_text(json.dumps(data), encoding="utf-8")
+    else:
+        path.write_text("{not json SECRET-TEXT", encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("artifact", "field"),
+    [("mismatch", "nli"), ("malformed", "temperature"), ("not_json", "json")],
+)
+def test_worker_exits_non_zero_when_the_calibrator_artifact_is_rejected(
+    monkeypatch, tmp_path, caplog, artifact, field
+):
+    harness = _Harness(monkeypatch)
+    path = tmp_path / "calibrator.json"
+    _write_rejected_artifact(path, artifact)
+    monkeypatch.setenv("HALLUCISCOPE_CALIBRATOR_PATH", str(path))
+
+    with caplog.at_level(logging.INFO, logger="backend.cli.main"):
+        result = CliRunner().invoke(app, ["worker"])
+
+    # A deliberate exit, not a crash: an unexpected exception also gives exit code 1.
+    assert isinstance(result.exception, SystemExit)
+    assert result.exit_code == 1
+    messages = [r.getMessage() for r in caplog.records if r.name == "backend.cli.main"]
+    assert [m for m in messages if m.startswith("calibrator artifact")] == [
+        f"calibrator artifact rejected: {field}"
+    ]
+    assert "SECRET-TEXT" not in caplog.text
+    # No worker started, no LLM client opened, and the pool was closed on the way out.
+    assert harness.events == ["db.open", "db.close"]
+    assert harness.services == []
+    assert harness.llms == []

@@ -124,13 +124,47 @@ def migrate():
     console.print(f"applied: {applied}" if applied else "up to date")
 
 
+def _reject_calibrator(field: str) -> typer.Exit:
+    """Log which field made the calibrator artifact unusable, and stop the worker.
+
+    Only the field name is logged. The exception message can quote artifact content.
+    """
+    logger.error("calibrator artifact rejected: %s", field)
+    return typer.Exit(1)
+
+
+def _load_calibrator(path: str):
+    """The calibrator artifact at `path`, or None when there is no file.
+
+    Without an artifact the worker still runs; analyses then fail as `calibrator_missing`. An
+    artifact it cannot read or validate stops the worker: serving with unusable weights is worse.
+    """
+    import json
+
+    from backend.calibration.artifact import Calibrator, CalibratorError
+
+    if not Path(path).is_file():
+        return None
+    try:
+        return Calibrator.load(path)
+    except CalibratorError as exc:
+        # The message starts with the offending field, then a description that may quote content.
+        raise _reject_calibrator(str(exc).partition(":")[0]) from None
+    except json.JSONDecodeError:
+        raise _reject_calibrator("json") from None
+
+
 async def _run_worker(settings: Settings) -> None:
     import signal
 
+    import httpx
+
+    from backend.calibration.artifact import CalibratorMismatch
     from backend.db.pool import Database
     from backend.jobs.registry import build_failure_handlers, build_handlers
     from backend.jobs.worker import Worker, default_worker_id
-    from backend.models.loader import load_embedder, load_reranker
+    from backend.llm.client import OllamaClient
+    from backend.models.loader import load_embedder, load_nli, load_reranker
     from backend.obs.logging import configure_logging
     from backend.obs.metrics_server import start_metrics_server
     from backend.services import Services
@@ -139,6 +173,7 @@ async def _run_worker(settings: Settings) -> None:
     # Each slot can hold a handler, a job heartbeat and its housekeeping at once.
     db = Database(settings.database_url, max_size=max(10, 4 * settings.worker_concurrency))
     metrics_server = None
+    http_client: httpx.AsyncClient | None = None
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     installed: list[signal.Signals] = []
@@ -153,7 +188,30 @@ async def _run_worker(settings: Settings) -> None:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, stop.set)
             installed.append(sig)
-        services = Services(settings, db, load_embedder(settings), load_reranker(settings))
+        # The cheap file check comes before the model loads.
+        calibrator = _load_calibrator(settings.calibrator_path)
+        embedder = load_embedder(settings)
+        reranker = load_reranker(settings)
+        nli = load_nli(settings)
+        if calibrator is not None:
+            try:
+                calibrator.check_parity(
+                    nli_model=nli.model_id,
+                    embedder_model=embedder.model_id,
+                    reranker_model=reranker.model_id,
+                )
+            except CalibratorMismatch as exc:
+                raise _reject_calibrator(exc.field) from None
+        http_client = httpx.AsyncClient()
+        llm = OllamaClient(
+            http_client,
+            settings.ollama_base_url,
+            settings.llm_model,
+            timeout_s=settings.llm_timeout_s,
+        )
+        services = Services(
+            settings, db, embedder, reranker, llm=llm, nli=nli, calibrator=calibrator
+        )
         base_id = default_worker_id()
         slots = [
             asyncio.create_task(
@@ -162,6 +220,8 @@ async def _run_worker(settings: Settings) -> None:
                     build_handlers(services),
                     failure_handlers=build_failure_handlers(services),
                     services=services,
+                    # The analysis enforces its own limit; the job limit is only a backstop.
+                    timeouts_s={"run_analysis": settings.analysis_timeout_s + 30},
                     worker_id=f"{base_id}:{slot}",
                 ).run(stop)
             )
@@ -182,6 +242,8 @@ async def _run_worker(settings: Settings) -> None:
         if metrics_server is not None:
             metrics_server.shutdown()
             metrics_server.server_close()
+        if http_client is not None:
+            await http_client.aclose()
         await db.close()
 
 

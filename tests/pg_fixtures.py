@@ -25,7 +25,13 @@ from backend.ingest.service import create_version
 from backend.jobs.registry import build_failure_handlers, build_handlers
 from backend.jobs.worker import Worker
 from backend.services import Services
-from tests.fakes import HashEmbedder, KeywordReranker
+from tests.fakes import (
+    HashEmbedder,
+    KeywordReranker,
+    RuleNLIScorer,
+    ScriptedLLM,
+    make_test_calibrator,
+)
 
 ADMIN_URL = os.environ.get(
     "HALLUCISCOPE_TEST_ADMIN_URL", "postgresql://postgres@localhost:54329/postgres"
@@ -147,8 +153,19 @@ async def db(pg_urls):
 
 @pytest.fixture
 def services(db):
-    """Worker services on the test database, with deterministic fake models."""
-    return Services(Settings(), db, HashEmbedder(), KeywordReranker())
+    """Worker services on the test database, with deterministic fake models.
+
+    `llm` is a ScriptedLLM: a test that needs specific replies sets `services.llm.responses`.
+    """
+    return Services(
+        Settings(),
+        db,
+        HashEmbedder(),
+        KeywordReranker(),
+        llm=ScriptedLLM(),
+        nli=RuleNLIScorer(),
+        calibrator=make_test_calibrator(),
+    )
 
 
 async def seed_docs(
